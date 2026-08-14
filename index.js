@@ -1,1 +1,814 @@
+// --- كود الحماية لمنع توقف البوت عند حدوث أخطاء ---
+process.on("uncaughtException", (err) => console.error("Caught exception: " + err));
+process.on("unhandledRejection", (reason, promise) => console.error("Unhandled Rejection at:", promise, "reason:", reason));
 
+// --- كود الخادم لضمان عدم خمول البوت على Render ---
+const express = require("express");
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send(`
+    <html dir="rtl">
+        <body style="text-align:center; margin-top:100px; font-family: Tahoma;">
+            <h2>🤖 AN GPT WhatsApp Bot is Running!</h2>
+            <p>البوت يعمل بنجاح ومحمي ضد السبام وتسريب الذاكرة وتكاليف الـ Tokens الزائدة.</p>
+        </body>
+    </html>
+  `);
+});
+
+app.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
+});
+
+// --- الكود الأساسي للبوت ---
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const fs = require('fs');
+
+// --- (1) تهيئة قاعدة البيانات والملفات والجلسات ---
+const DB_FILE = './bankDB.json';
+let globalData = { bank: {}, lastReset: Date.now() };
+
+// لحفظ الألعاب الشغالة حالياً لكل شات (JID)
+const activeGames = {};
+
+function loadDB() {
+    try {
+        if (fs.existsSync(DB_FILE)) {
+            globalData = JSON.parse(fs.readFileSync(DB_FILE));
+        }
+    } catch (e) {
+        console.error("خطأ في تحميل قاعدة البيانات:", e);
+    }
+    if (!globalData.bank) globalData.bank = {};
+    if (!globalData.lastReset) globalData.lastReset = Date.now();
+}
+
+function saveDB() {
+    fs.writeFileSync(DB_FILE, JSON.stringify(globalData, null, 2));
+}
+
+// --- (2) بنك الأسئلة للألعاب ---
+const GAMES_BANK = {
+    دمج: [
+        { q: "م د ر س ة", a: "مدرسة", reward: 400 },
+        { q: "ح ا س ب", a: "حاسب", reward: 350 },
+        { q: "ب ر م ج ة", a: "برمجة", reward: 500 },
+        { q: "أ م ن س ي ب ر ا ن ي", a: "أمن سيبراني", reward: 800 },
+        { q: "ش ط ر ن ج", a: "شطرنج", reward: 450 },
+        { q: "ع ض ل ا ت", a: "عضلات", reward: 400 },
+        { q: "ك م ب ي و ت ر", a: "كمبيوتر", reward: 600 },
+        { q: "خ و ا ر ز م ي ة", a: "خوارزمية", reward: 700 },
+        { q: "ذ ك ا ء ا ص ط ن ا ع ي", a: "ذكاء اصطناعي", reward: 900 },
+        { q: "س ي ا ر ة", a: "سيارة", reward: 300 },
+        { q: "ع د ن", a: "عدن", reward: 350 },
+        { q: "ط ا ئ ر ة", a: "طائرة", reward: 400 },
+        { q: "ا ن ت ر ن ت", a: "انترنت", reward: 500 },
+        { q: "ك ر ة ق د م", a: "كرة قدم", reward: 500 },
+        { q: "ج ا م ع ة", a: "جامعة", reward: 450 },
+        { q: "م س ت ش ف ى", a: "مستشفى", reward: 550 },
+        { q: "م ه ن د س", a: "مهندس", reward: 400 },
+        { q: "ح م ا ي ة", a: "حماية", reward: 350 },
+        { q: "ب ر و ت ي ن", a: "بروتين", reward: 500 },
+        { q: "ا خ ت ب ا ر", a: "اختبار", reward: 450 },
+        { q: "ت ل ي ج ر ا م", a: "تليجرام", reward: 400 },
+        { q: "س ي ر ف ر", a: "سيرفر", reward: 450 },
+        { q: "ب و ت", a: "بوت", reward: 250 },
+        { q: "ه ا ك ر", a: "هاكر", reward: 500 },
+        { q: "ف ل س ط ي ن", a: "فلسطين", reward: 600 },
+        { q: "م ل ع ب", a: "ملعب", reward: 300 },
+        { q: "ت ش ف ي ر", a: "تشفير", reward: 550 },
+        { q: "ك ي ب و ر د", a: "كيبورد", reward: 400 },
+        { q: "ش ا ش ة", a: "شاشة", reward: 350 },
+        { q: "ا ل ي م ن", a: "اليمن", reward: 400 },
+        { q: "ب ح ر", a: "بحر", reward: 200 },
+        { q: "س م ك ة", a: "سمكة", reward: 250 },
+        { q: "ت ن ي ن", a: "تنين", reward: 350 },
+        { q: "م ك ت ب ة", a: "مكتبة", reward: 400 },
+        { q: "س ك ر ي ب ت", a: "سكريبت", reward: 500 },
+        { q: "ص ح ر ا ء", a: "صحراء", reward: 300 },
+        { q: "ق ه و ة", a: "قهوة", reward: 300 },
+        { q: "ك ا م ي ر ا", a: "كاميرا", reward: 400 },
+        { q: "ط ب ي ب", a: "طبيب", reward: 350 },
+        { q: "ا س ت ث م ا ر", a: "استثمار", reward: 600 },
+        { q: "ع ب ق ر ي", a: "عبقري", reward: 450 },
+        { q: "ن ج ا ح", a: "نجاح", reward: 300 },
+        { q: "س ي ف", a: "سيف", reward: 250 },
+        { q: "ا ن د ر و ي د", a: "اندرويد", reward: 450 },
+        { q: "ا ي ف و ن", a: "ايفون", reward: 400 },
+        { q: "ب ل ا ي س ت ي ش ن", a: "بلايستيشن", reward: 700 },
+        { q: "ت ك ن و ل و ج ي ا", a: "تكنولوجيا", reward: 650 },
+        { q: "د ف ا ع ص ق ل ي", a: "دفاع صقلي", reward: 750 },
+        { q: "ج د ا ر ح م ا ي ة", a: "جدار حماية", reward: 700 },
+        { q: "ك ش م ل ك", a: "كش ملك", reward: 500 },
+        { q: "ت م ر ي ن ص د ر", a: "تمرين صدر", reward: 600 },
+        { q: "م ي ك ا ن ي ك ا", a: "ميكانيكا", reward: 650 },
+        { q: "ا ق ت ص ا د", a: "اقتصاد", reward: 550 },
+        { q: "ق ا ن و ن", a: "قانون", reward: 450 },
+        { q: "ف ي ز ي ا ء", a: "فيزياء", reward: 500 },
+        { q: "م ق ا و م ة", a: "مقاومة", reward: 550 },
+        { q: "ك ر ي س ت ي ا ن و", a: "كريستيانو", reward: 700 },
+        { q: "ر ي ا ل م د ر ي د", a: "ريال مدريد", reward: 650 },
+        { q: "ب ر ش ل و ن ة", a: "برشلونة", reward: 600 },
+        { q: "ا ل م ح ي ط", a: "المحيط", reward: 450 },
+        { q: "د ي ن ا ص و ر", a: "ديناصور", reward: 550 },
+        { q: "م ي ك ر و ف و ن", a: "ميكروفون", reward: 600 },
+        { q: "ب ل و ت و ث", a: "بلوتوث", reward: 500 },
+        { q: "ا س ت ر ا ت ي ج ي ة", a: "استراتيجية", reward: 900 },
+        { q: "ب ي ا د ق", a: "بيادق", reward: 400 },
+        { q: "م ك م ل ا ت", a: "مكملات", reward: 500 },
+        { q: "س ع ر ا ت", a: "سعرات", reward: 450 },
+        { q: "ا خ ت ر ا ق", a: "اختراق", reward: 500 },
+        { q: "ش ب ك ا ت", a: "شبكات", reward: 450 },
+        { q: "م س ت ق ب ل", a: "مستقبل", reward: 550 },
+        { q: "ت ط و ي ر", a: "تطوير", reward: 450 },
+        { q: "ك و د م ص د ر ي", a: "كود مصدري", reward: 750 },
+        { q: "ن و د ج ي اس", a: "نود جي اس", reward: 650 },
+        { q: "خ ا د م", a: "خادم", reward: 350 },
+        { q: "ق ا ع د ة ب ي ا ن ا ت", a: "قاعدة بيانات", reward: 850 }
+    ],
+    فكك: [
+        { q: "العلم نور والمستقبل", a: "ا ل ع ل م ن و ر و ا ل م س ت ق ب ل", reward: 600 },
+        { q: "القراءة تغذي العقل", a: "ا ل ق ر ا ء ة ت غ ذ ي ا ل ع ق ل", reward: 600 },
+        { q: "الرياضة تقوي الجسم", a: "ا ل ر ي ا ض ة ت ق و ي ا ل ج س م", reward: 600 },
+        { q: "الصبر مفتاح الفرج", a: "ا ل ص ب ر م ف ت ا ح ا ل ف ر ج", reward: 600 },
+        { q: "العقل السليم أمانة", a: "ا ل ع ق ل ا ل س ل ي م أ م ا ن ة", reward: 600 },
+        { q: "الكلمة الطيبة صدقة", a: "ا ل ك ل م ة ا ل ط ي ب ة ص د ق ة", reward: 600 },
+        { q: "التعلم أساس النجاح", a: "ا ل ت ع ل م أ س ا س ا ل ن ج ا ح", reward: 600 },
+        { q: "العمل عبادة وإتقان", a: "ا ل ع م ل ع ب ا د ة و إ ت ق ا ن", reward: 600 },
+        { q: "الصدق ينجي دائما", a: "ا ل ص د ق ي ن ج ي د ا ئ م ا", reward: 600 },
+        { q: "الأمل يضيء الحياة", a: "ا ل أ م ل ي ض ي ء ا ل ح ي ا ة", reward: 600 },
+        { q: "الوقت ثروة غالية", a: "ا ل و ق ت ث ر و ة غ ا ل ي ة", reward: 600 },
+        { q: "الجد يصنع المعجزات", a: "ا ل ج د ي ص ن ع ا ل م ع ج ز ا ت", reward: 600 },
+        { q: "الوفاء خصلة حميدة", a: "ا ل و ف ا ء خ ص ل ة ح م ي د ة", reward: 600 },
+        { q: "الإيمان يبعث الطمأنينة", a: "ا ل إ ي م ا ن ي ب ع ث ا ل ط م أ ن ي ن ة", reward: 600 },
+        { q: "الشجاعة صفة الفرسان", a: "ا ل ش ج ا ع ة ص ف ة ا ل ف ر س ا ن", reward: 600 },
+        { q: "التواضع يرفع القدر", a: "ا ل ت و ا ض ع ي ر ف ع ا ل ق د ر", reward: 600 },
+        { q: "الحكمة ضالة المؤمن", a: "ا ل ح ك م ة ض ا ل ة ا ل م ؤ م ن", reward: 600 },
+        { q: "الأخلاق عنوان الشعوب", a: "ا ل أ خ ل ا ق ع ن و ا ن ا ل ش ع و ب", reward: 600 },
+        { q: "الابتسامة تجلب المحبة", a: "ا ل ا ب ت س ا م ة ت ج ل ب ا ل م ح ب ة", reward: 600 },
+        { q: "النظام يختصر الوقت", a: "ا ل ن ظ ا م ي خ ت ص ر ا ل و ق ت", reward: 600 },
+        { q: "التعاون يثمر النجاح", a: "ا ل ت ع ا و ن ي ث م ر ا ل ن ج ا ح", reward: 600 },
+        { q: "الإصرار يهزم الصعاب", a: "ا ل إ ص ر ا ر ي ه ز م ا ل ص ع ا ب", reward: 600 },
+        { q: "الكرم يطيب النفوس", a: "ا ل ك ر م ي ط ي ب ا ل ن ف و س", reward: 600 },
+        { q: "الأمانة تاج الأخلاق", a: "ا ل أ م ا ن ة ت ا ج ا ل أ خ ل ا ق", reward: 600 },
+        { q: "القناعة كنز لايفنى", a: "ا ل ق ن ا ع ة ك ن ز ل ا ي ف ن ى", reward: 600 },
+        { q: "التأني يجلب السلامة", a: "ا ل ت أ ن ي ي ج ل ب ا ل س ل ا م ة", reward: 600 },
+        { q: "الحلم يطفئ الغضب", a: "ا ل ح ل م ي ط ف ئ ا ل غ ض ب", reward: 600 },
+        { q: "العزيمة تكسر المستحيل", a: "ا ل ع ز ي م ة ت ك س ر ا ل م س ت ح ي ل", reward: 600 },
+        { q: "العدل أساس الملك", a: "ا ل ع د ل أ س ا س ا ل م ل ك", reward: 600 },
+        { q: "النصيحة أغلى هدية", a: "ا ل ن ص ي ح ة أ غ ل ى ه د ي ة", reward: 600 },
+        { q: "المعرفة قوة عظيمة", a: "ا ل م ع ر ف ة ق و ة ع ظ ي م ة", reward: 600 },
+        { q: "الاحترام يبني الجسور", a: "ا ل ا ح ت ر ا م ي ب ن ي ا ل ج س و ر", reward: 600 },
+        { q: "الهدوء يمنح التفكير", a: "ا ل ه د و ء ي م ن ح ا ل ت ف ك ي ر", reward: 600 },
+        { q: "الصداقة زهرة الحياة", a: "ا ل ص د ا ق ة ز ه ر ة ا ل ح ي ا ة", reward: 600 },
+        { q: "النشاط يطرد الخمول", a: "ا ل ن ش ا ط ي ط ر د ا ل خ م و ل", reward: 600 },
+        { q: "الصدق ركيزة الثقة", a: "ا ل ص د ق ر ك ي ز ة ا ل ث ق ة", reward: 600 },
+        { q: "العفو عند المقدرة", a: "ا ل ع ف و ع ن د ا ل م ق د ر ة", reward: 600 },
+        { q: "الطمأنينة في الذكر", a: "ا ل ط م أ ن ي ن ة ف ي ا ل ذ ك ر", reward: 600 },
+        { q: "النجاح يبدأ برؤية", a: "ا ل ن ج ا ح ي ب د أ ب ر ؤ ي ة", reward: 600 },
+        { q: "الطموح يرفع الإنسان", a: "ا ل ط م و ح ي ر ف ع ا ل إ ن س ا ن", reward: 600 },
+        { q: "الحق يعلو دائما", a: "ا ل ح ق ي ع ل و د ا ئ م ا", reward: 600 },
+        { q: "الصحة أغلى ثروة", a: "ا ل ص ح ة أ غ ل ى ث ر و ة", reward: 600 },
+        { q: "الأخوة رباط وثيق", a: "ا ل أ خ و ة ر ب ا ط و ث ي ق", reward: 600 },
+        { q: "الوفاء يرفع القيمة", a: "ا ل و ف ا ء ي ر ف ع ا ل ق ي م ة", reward: 600 },
+        { q: "العطاء يثمر البسمة", a: "ا ل ع ط ا ء ي ث م ر ا ل ب س م ة", reward: 600 },
+        { q: "الأمل ينير الظلام", a: "ا ل أ م ل ي ن ي ر ا ل ظ ل ا م", reward: 600 },
+        { q: "الجهد يصنع الفارق", a: "ا ل ج ه د ي ص ن ع ا ل ف ا ر ق", reward: 600 },
+        { q: "الشكر يديم النعم", a: "ا ل ش ك ر ي د ي م ا ل ن ع م", reward: 600 },
+        { q: "التفاؤل يبعث الأمل", a: "ا ل ت ف ا ؤ ل ي ب ع ث ا ل أ م ل", reward: 600 },
+        { q: "العقل يزن الأمور", a: "ا ل ع ق ل ي ز ن ا ل أ م و ر", reward: 600 },
+        { q: "البداية تصنع النهاية", a: "ا ل ب د ا ي ة ت ص ن ع ا ل ن ه ا ي ة", reward: 600 },
+        { q: "الخبرة تكسب المهارة", a: "ا ل خ ب ر ة ت ك س ب ا ل م ه ا ر ة", reward: 600 },
+        { q: "الإتقان يضمن الجودة", a: "ا ل إ ت ق ا ن ي ض م ن ا ل ج و د ة", reward: 600 },
+        { q: "الأدب يسحر العقول", a: "ا ل أ د ب ي س ح ر ا ل ع ق و ل", reward: 600 },
+        { q: "السلام يجمع القلوب", a: "ا ل س ل ا م ي ج م ع ا ل ق ل و ب", reward: 600 },
+        { q: "الكرامة لا تقدر", a: "ا ل ك ر ا م ة ل ا ت ق د ر", reward: 600 },
+        { q: "المستقبل ينتظر المجتهد", a: "ا ل م س ت ق ب ل ي ن ت ظ ر ا ل م ج ت ه د", reward: 600 },
+        { q: "الحب يحيي الأرواح", a: "ا ل ح ب ي ح ي ي ا ل أ ر و ا ح", reward: 600 },
+        { q: "النقاء يزين النفس", a: "ا ل ن ق ا ء ي ز ي ن ا ل ن ف س", reward: 600 },
+        { q: "الشغف يولد الإبداع", a: "ا ل ش غ ف ي و ل د ا ل إ ب د ا ع", reward: 600 },
+        { q: "الفكر يرتقي بالأمم", a: "ا ل ف ك ر ي ر ت ق ي ب ا ل أ م م", reward: 600 },
+        { q: "الحقيقة تظهر جلية", a: "ا ل ح ق ي ق ة ت ظ ه ر ج ل ي ة", reward: 600 },
+        { q: "الإيمان يصنع الثبات", a: "ا ل إ ي م ا ن ي ص ن ع ا ل ث ب ا ت", reward: 600 },
+        { q: "الرحمة تغمر القلوب", a: "ا ل ر ح م ة ت غ م ر ا ل ق ل و ب", reward: 600 },
+        { q: "العدالة تحمي الجميع", a: "ا ل ع د ا ل ة ت ح م ي ا ل ج م ي ع", reward: 600 },
+        { q: "الاستمرار يصنع النجاح", a: "ا ل ا س ت م ر ا ر ي ص ن ع ا ل ن ج ا ح", reward: 600 },
+        { q: "الإخلاص يرفع الأعمال", a: "ا ل إ خ ل ا ص ي ر ف ع ا ل أ ع م ا ل", reward: 600 },
+        { q: "الفهم يسبق التطبيق", a: "ا ل ف ه م ي س ب ق ا ل ت ط ب ي ق", reward: 600 },
+        { q: "المعرفة تفتح الأبواب", a: "ا ل م ع ر ف ة ت ف ت ح ا ل أ ب و ا ب", reward: 600 },
+        { q: "الكلمة تغير مسارات", a: "ا ل ك ل م ة ت غ ي ر م س ا ر ا ت", reward: 600 },
+        { q: "الصمت أحيانا حكمة", a: "ا ل ص م ت أ ح ي ا ن ا ح ك م ة", reward: 600 },
+        { q: "الحلم يحقق الذات", a: "ا ل ح ل م ي ح ق ق ا ل ذ ا ت", reward: 600 },
+        { q: "الطيب يترك أثرا", a: "ا ل ط ي ب ي ت ر ك أ ث ر ا", reward: 600 },
+        { q: "الإرادة تقهر الظروف", a: "ا ل إ ر ا د ة ت ق ه ر ا ل ظ ر و ف", reward: 600 },
+        { q: "البساطة جمال الحاضر", a: "ا ل ب س ا ط ة ج م ا ل ا ل ح ا ض ر", reward: 600 },
+        { q: "التركيز يمنح القوة", a: "ا ل ت ر ك ي ز ي م ن ح ا ل ق و ة", reward: 600 },
+        { q: "الصبر ينير الطريق", a: "ا ل ص ب ر ي ن ي ر ا ل ط ر ي ق", reward: 600 },
+        { q: "الشجاعة تفتح الآفاق", a: "ا ل ش ج ا ع ة ت ف ت ح ا ل آ ف ا ق", reward: 600 },
+        { q: "الوفاء أصل الكرامة", a: "ا ل و ف ا ء أ ص ل ا ل ك ر ا م ة", reward: 600 },
+        { q: "الابتكار يجدد الحياة", a: "ا ل ا ب ت ك ا ر ي ج د د ا ل ح ي ا ة", reward: 600 },
+        { q: "التسامح يمحو الأحقاد", a: "ا ل ت س ا م ح ي م ح و ا ل أ ح ق ا د", reward: 600 },
+        { q: "الوعي يحمي المجتمعات", a: "ا ل و ع ي ي ح م ي ا ل م ج ت م ع ا ت", reward: 600 },
+        { q: "الإتقان يبني الحضارات", a: "ا ل إ ت ق ا ن ث ي ب ن ي ا ل ح ض ا ر ا ت", reward: 600 },
+        { q: "الهدف يوجه الخطوات", a: "ا ل ه د ف ي و ج ه ا ل خ ط و ا ت", reward: 600 },
+        { q: "الثبات يحقق الفوز", a: "ا ل ث ب ا ت ي ح ق ق ا ل ف و ز", reward: 600 },
+        { q: "العزم يذلل الصعوبات", a: "ا ل ع ز م ي ذ ل ل ا ل ص ع و ب ا ت", reward: 600 },
+        { q: "الحكمة ترشد العقول", a: "ا ل ح ك م ة ت ر ش د ا ل ع ق و ل", reward: 600 },
+        { q: "الطموح يدفع للقمة", a: "ا ل ط م و ح ي د ف ع ل ل ق م ة", reward: 600 },
+        { q: "الأمل شمس دافئة", a: "ا ل أ م ل ش م س د ا ف ئ ة", reward: 600 },
+        { q: "العمل يثمر النجاحات", a: "ا ل ع م ل ي ث م ر ا ل ن ج ا ح ا ت", reward: 600 },
+        { q: "الحقيقة تمنح الثقة", a: "ا ل ح ق ي ق ة ت م ن ح ا ل ث ق ة", reward: 600 },
+        { q: "النبل يعلي المكانة", a: "ا ل ن ب ل ي ع ل ي ا ل م ك ا ن ة", reward: 600 },
+        { q: "العطاء يضاعف الرزق", a: "ا ل ع ط ا ء ي ض ا ع ف ا ل ر ز ق", reward: 600 },
+        { q: "الجهد يلغي الفشل", a: "ا ل ج ه د ي ل غ ي ا ل ف ش ل", reward: 600 },
+        { q: "الإيمان يمنح الأمان", a: "ا ل إ ي م ا ن ي م ن ح ا ل أ م ا ن", reward: 600 },
+        { q: "التعلم يستمر أبدًا", a: "ا ل ت ع ل م ي س ت م ر أ ب د ً ا", reward: 600 },
+        { q: "التفكير يسبق القرار", a: "ا ل ت ف ك ي ر ي س ب ق ا ل ق ر ا ر", reward: 600 },
+        { q: "الكلمة تبني البيوت", a: "ا ل ك ل م ة ت ب ن ي ا ل ب ي و ت", reward: 600 },
+        { q: "الصحة تاج الأبدان", a: "ا ل ص ح ة ت ا ج ا ل أ ب د ا ن", reward: 600 },
+        { q: "الخير ينعكس دائمًا", a: "ا ل خ ي ر ي ن ع ك س د ا ئ م ً ا", reward: 600 }
+    ],
+    سرعة: [
+        { q: "اكتب بسرعة: صقر الجزيرة", a: "صقر الجزيرة", reward: 450 },
+        { q: "اكتب بسرعة: تحدي الذكاء الاصطناعي", a: "تحدي الذكاء الاصطناعي", reward: 600 },
+        { q: "اكتب بسرعة: بوت CR7 الأسطوري", a: "بوت cr7 الأسطوري", reward: 500 },
+        { q: "اكتب بسرعة: الأمن السيبراني هو تخصص المستقبل", a: "الأمن السيبراني هو تخصص المستقبل", reward: 800 },
+        { q: "اكتب بسرعة: الملك يحتاج حماية في الشطرنج", a: "الملك يحتاج حماية في الشطرنج", reward: 750 },
+        { q: "اكتب بسرعة: تمرين الظهر والباي يقوي العضلات", a: "تمرين الظهر والباي يقوي العضلات", reward: 700 },
+        { q: "اكتب بسرعة: من جد وجد ومن زرع حصد", a: "من جد وجد ومن زرع حصد", reward: 550 },
+        { q: "اكتب بسرعة: القهوة سر النشاط والتركيز", a: "القهوة سر النشاط والتركيز", reward: 600 },
+        { q: "اكتب بسرعة: سبحان الله وبحمده سبحان الله العظيم", a: "سبحان الله وبحمده سبحان الله العظيم", reward: 800 },
+        { q: "اكتب بسرعة: لا إله إلا الله", a: "لا إله إلا الله", reward: 400 },
+        { q: "اكتب بسرعة: البحر هادئ والموج عالي", a: "البحر هادئ والموج عالي", reward: 500 },
+        { q: "اكتب بسرعة: أسرع لاعب في العالم", a: "أسرع لاعب في العالم", reward: 450 },
+        { q: "اكتب بسرعة: الكتاب خير جليس في الزمان", a: "الكتاب خير جليس في الزمان", reward: 600 },
+        { q: "اكتب بسرعة: الرياضيات لغة الكون الأساسية", a: "الرياضيات لغة الكون الأساسية", reward: 700 },
+        { q: "اكتب بسرعة: العمل بذكاء أفضل من العمل بجهد", a: "العمل بذكاء أفضل من العمل بجهد", reward: 750 },
+        { q: "اكتب بسرعة: تعلم البرمجة يفتح لك آفاق جديدة", a: "تعلم البرمجة يفتح لك آفاق جديدة", reward: 800 },
+        { q: "اكتب بسرعة: الوقت كالسيف إن لم تقطعه قطعك", a: "الوقت كالسيف إن لم تقطعه قطعك", reward: 650 },
+        { q: "اكتب بسرعة: العقل السليم في الجسم السليم", a: "العقل السليم في الجسم السليم", reward: 550 },
+        { q: "اكتب بسرعة: تطوير الذات يبدأ بخطوة", a: "تطوير الذات يبدأ بخطوة", reward: 500 },
+        { q: "اكتب بسرعة: البدايات دائما تكون صعبة", a: "البدايات دائما تكون صعبة", reward: 550 },
+        { q: "اكتب بسرعة: من طلب العلا سهر الليالي", a: "من طلب العلا سهر الليالي", reward: 600 },
+        { q: "اكتب بسرعة: العجلة من الشيطان", a: "العجلة من الشيطان", reward: 450 },
+        { q: "اكتب بسرعة: ابتسم فالحياة جميلة", a: "ابتسم فالحياة جميلة", reward: 500 },
+        { q: "اكتب بسرعة: لا تؤجل عمل اليوم إلى الغد", a: "لا تؤجل عمل اليوم إلى الغد", reward: 550 },
+        { q: "اكتب بسرعة: خير الكلام ما قل ودل", a: "خير الكلام ما قل ودل", reward: 400 },
+        { q: "اكتب بسرعة: الجار قبل الدار", a: "الجار قبل الدار", reward: 350 },
+        { q: "اكتب بسرعة: الصبر مفتاح الفرج", a: "الصبر مفتاح الفرج", reward: 400 },
+        { q: "اكتب بسرعة: الطيور على أشكالها تقع", a: "الطيور على أشكالها تقع", reward: 500 },
+        { q: "اكتب بسرعة: في التأني السلامة وفي العجلة الندامة", a: "في التأني السلامة وفي العجلة الندامة", reward: 700 },
+        { q: "اكتب بسرعة: كلما زادت المعرفة قل الكلام", a: "كلما زادت المعرفة قل الكلام", reward: 650 },
+        { q: "اكتب بسرعة: لغة جافا سكريبت من أقوى اللغات", a: "لغة جافا سكريبت من أقوى اللغات", reward: 700 },
+        { q: "اكتب بسرعة: البوت شغال بدون توقف", a: "البوت شغال بدون توقف", reward: 450 },
+        { q: "اكتب بسرعة: سرعة البديهة تنقذك من المواقف", a: "سرعة البديهة تنقذك من المواقف", reward: 600 },
+        { q: "اكتب بسرعة: السكوت علامة الرضا", a: "السكوت علامة الرضا", reward: 400 },
+        { q: "اكتب بسرعة: درهم وقاية خير من قنطار علاج", a: "درهم وقاية خير من قنطار علاج", reward: 650 },
+        { q: "اكتب بسرعة: الدفاع الصقلي من أقوى الافتتاحيات في الشطرنج", a: "الدفاع الصقلي من أقوى الافتتاحيات في الشطرنج", reward: 900 },
+        { q: "اكتب بسرعة: حماية الشبكات من الاختراق مهمة جدا", a: "حماية الشبكات من الاختراق مهمة جدا", reward: 850 },
+        { q: "اكتب بسرعة: الاستمرارية في التمرين تصنع الأبطال", a: "الاستمرارية في التمرين تصنع الأبطال", reward: 750 },
+        { q: "اكتب بسرعة: عدن ثغر اليمن الباسم", a: "عدن ثغر اليمن الباسم", reward: 600 },
+        { q: "اكتب بسرعة: الشجرة المثمرة ترمى بالحجارة", a: "الشجرة المثمرة ترمى بالحجارة", reward: 650 },
+        { q: "اكتب بسرعة: من يزرع الريح يحصد العاصفة", a: "من يزرع الريح يحصد العاصفة", reward: 700 },
+        { q: "اكتب بسرعة: العلم يبني بيوتا لا عماد لها", a: "العلم يبني بيوتا لا عماد لها", reward: 750 },
+        { q: "اكتب بسرعة: القناعة كنز لا يفنى أبدا", a: "القناعة كنز لا يفنى أبدا", reward: 600 },
+        { q: "اكتب بسرعة: الكلمة الطيبة مفتاح القلوب", a: "الكلمة الطيبة مفتاح القلوب", reward: 650 },
+        { q: "اكتب بسرعة: لا يأس مع الحياة ولا حياة مع اليأس", a: "لا يأس مع الحياة ولا حياة مع اليأس", reward: 800 },
+        { q: "اكتب بسرعة: تفاءلوا بالخير تجدوه أمامكم", a: "تفاءلوا بالخير تجدوه أمامكم", reward: 700 },
+        { q: "اكتب بسرعة: الصديق الحقيقي يظهر وقت الضيق", a: "الصديق الحقيقي يظهر وقت الضيق", reward: 750 },
+        { q: "اكتب بسرعة: البرمجة تحتاج إلى صبر وتركيز عالي", a: "البرمجة تحتاج إلى صبر وتركيز عالي", reward: 850 },
+        { q: "اكتب بسرعة: من لم يذق مر التعلم ساعة تجرع ذل الجهل طول حياته", a: "من لم يذق مر التعلم ساعة تجرع ذل الجهل طول حياته", reward: 1000 },
+        { q: "اكتب بسرعة: الأخطاء البرمجية تعلمنا الكثير", a: "الأخطاء البرمجية تعلمنا الكثير", reward: 650 },
+        { q: "اكتب بسرعة: الضربة التي لا تقتلك تقويك", a: "الضربة التي لا تقتلك تقويك", reward: 650 },
+        { q: "اكتب بسرعة: الوقت ذهب إن لم تدركه ذهب", a: "الوقت ذهب إن لم تدركه ذهب", reward: 700 },
+        { q: "اكتب بسرعة: الأهداف الكبيرة تحتاج جهودا جبارة", a: "الأهداف الكبيرة تحتاج جهودا جبارة", reward: 750 },
+        { q: "اكتب بسرعة: تعلم من أخطاء الأمس لتبني الغد", a: "تعلم من أخطاء الأمس لتبني الغد", reward: 750 }
+    ],
+    عواصم: [
+        { q: "ما هي عاصمة السعودية؟", a: "الرياض", reward: 300 },
+        { q: "ما هي عاصمة الإمارات؟", a: "ابوظبي", reward: 300 },
+        { q: "ما هي عاصمة مصر؟", a: "القاهرة", reward: 300 },
+        { q: "ما هي عاصمة اليمن؟", a: "صنعاء", reward: 350 },
+        { q: "ما هي عاصمة فرنسا؟", a: "باريس", reward: 400 },
+        { q: "ما هي عاصمة بريطانيا؟", a: "لندن", reward: 400 },
+        { q: "ما هي عاصمة إيطاليا؟", a: "روما", reward: 400 },
+        { q: "ما هي عاصمة اليابان؟", a: "طوكيو", reward: 500 },
+        { q: "ما هي عاصمة كوريا الجنوبية؟", a: "سيول", reward: 500 },
+        { q: "ما هي عاصمة الصين؟", a: "بكين", reward: 450 },
+        { q: "ما هي عاصمة أمريكا؟", a: "واشنطن", reward: 400 },
+        { q: "ما هي عاصمة ألمانيا؟", a: "برلين", reward: 450 },
+        { q: "ما هي عاصمة روسيا؟", a: "موسكو", reward: 450 },
+        { q: "ما هي عاصمة العراق؟", a: "بغداد", reward: 350 },
+        { q: "ما هي عاصمة سوريا؟", a: "دمشق", reward: 350 },
+        { q: "ما هي عاصمة الأردن؟", a: "عمان", reward: 350 },
+        { q: "ما هي عاصمة الكويت؟", a: "الكويت", reward: 300 },
+        { q: "ما هي عاصمة عمان؟", a: "مسقط", reward: 350 },
+        { q: "ما هي عاصمة البحرين؟", a: "المنامة", reward: 350 },
+        { q: "ما هي عاصمة قطر؟", a: "الدوحة", reward: 300 },
+        { q: "ما هي عاصمة المغرب؟", a: "الرباط", reward: 400 },
+        { q: "ما هي عاصمة الجزائر؟", a: "الجزائر", reward: 300 },
+        { q: "ما هي عاصمة تونس؟", a: "تونس", reward: 300 },
+        { q: "ما هي عاصمة تركيا؟", a: "انقرة", reward: 450 },
+        { q: "ما هي عاصمة إسبانيا؟", a: "مدريد", reward: 450 },
+        { q: "ما هي عاصمة فلسطين؟", a: "القدس", reward: 600 },
+        { q: "ما هي عاصمة لبنان؟", a: "بيروت", reward: 400 },
+        { q: "ما هي عاصمة السودان؟", a: "الخرطوم", reward: 400 },
+        { q: "ما هي عاصمة ليبيا؟", a: "طرابلس", reward: 350 },
+        { q: "ما هي عاصمة موريتانيا؟", a: "نواكشوط", reward: 450 },
+        { q: "ما هي عاصمة جيبوتي؟", a: "جيبوتي", reward: 300 },
+        { q: "ما هي عاصمة الصومال؟", a: "مقديشو", reward: 400 },
+        { q: "ما هي عاصمة البرازيل؟", a: "برازيليا", reward: 500 },
+        { q: "ما هي عاصمة الأرجنتين؟", a: "بوينس آيرس", reward: 550 },
+        { q: "ما هي عاصمة كندا؟", a: "أوتاوا", reward: 500 },
+        { q: "ما هي عاصمة أستراليا؟", a: "كانبرا", reward: 550 },
+        { q: "ما هي عاصمة الهند؟", a: "نيودلهي", reward: 500 },
+        { q: "ما هي عاصمة باكستان؟", a: "إسلام آباد", reward: 500 },
+        { q: "ما هي عاصمة السويد؟", a: "ستوكهولم", reward: 550 },
+        { q: "ما هي عاصمة النرويج؟", a: "أوسلو", reward: 550 },
+        { q: "ما هي عاصمة الدنمارك؟", a: "كوبنهاجن", reward: 600 },
+        { q: "ما هي عاصمة هولندا؟", a: "أمستردام", reward: 500 },
+        { q: "What is the capital of Portugal?", a: "لشبونة", reward: 500 },
+        { q: "ما هي عاصمة اليونان؟", a: "أثينا", reward: 450 },
+        { q: "ما هي عاصمة سويسرا؟", a: "بيرن", reward: 600 },
+        { q: "ما هي عاصمة النمسا؟", a: "فيينا", reward: 500 },
+        { q: "ما هي عاصمة بلجيكا؟", a: "بروكسل", reward: 550 },
+        { q: "ما هي عاصمة المكسيك؟", a: "مكسيكو سيتي", reward: 450 },
+        { q: "ما هي عاصمة ماليزيا؟", a: "كوالالمبور", reward: 550 },
+        { q: "ما هي عاصمة إندونيسيا؟", a: "جاكرتا", reward: 500 },
+        { q: "ما هي عاصمة تشيلي؟", a: "سانتياغو", reward: 650 },
+        { q: "ما هي عاصمة بيرو؟", a: "ليما", reward: 600 },
+        { q: "ما هي عاصمة كولومبيا؟", a: "بوغوتا", reward: 650 },
+        { q: "ما هي عاصمة فنزويلا؟", a: "كاراكاس", reward: 700 },
+        { q: "ما هي عاصمة كوبا؟", a: "هافانا", reward: 600 },
+        { q: "ما هي عاصمة نيوزيلندا؟", a: "ويلينغتون", reward: 800 },
+        { q: "ما هي عاصمة الفلبين؟", a: "مانيلا", reward: 650 },
+        { q: "ما هي عاصمة تايلاند؟", a: "بانكوك", reward: 600 },
+        { q: "ما هي عاصمة فيتنام؟", a: "هانوي", reward: 650 },
+        { q: "ما هي عاصمة كوريا الشمالية؟", a: "بيونغ يانغ", reward: 850 },
+        { q: "ما هي عاصمة جنوب أفريقيا؟", a: "بريتوريا", reward: 750 },
+        { q: "ما هي عاصمة كينيا؟", a: "نيروبي", reward: 700 },
+        { q: "ما هي عاصمة نيجيريا؟", a: "أبوجا", reward: 700 },
+        { q: "ما هي عاصمة غانا؟", a: "أكرا", reward: 650 },
+        { q: "ما هي عاصمة Сينغال؟", a: "داكار", reward: 650 },
+        { q: "ما هي عاصمة مالي؟", a: "باماكو", reward: 700 },
+        { q: "ما هي عاصمة إثيوبيا؟", a: "أديس أبابا", reward: 750 },
+        { q: "ما هي عاصمة أوغندا؟", a: "كمبالا", reward: 700 },
+        { q: "ما هي عاصمة مدغشقر؟", a: "أنتاناناريفو", reward: 900 },
+        { q: "ما هي عاصمة أيسلندا؟", a: "ريكيافيك", reward: 850 },
+        { q: "ما هي عاصمة بولندا؟", a: "وارسو", reward: 650 },
+        { q: "ما هي عاصمة رومانيا؟", a: "بوخارست", reward: 650 },
+        { q: "ما هي عاصمة المهن (هنغاريا)؟", a: "بودابست", reward: 650 },
+        { q: "ما هي عاصمة أوكرانيا؟", a: "كييف", reward: 600 },
+        { q: "ما هي عاصمة كرواتيا؟", a: "زغرب", reward: 700 },
+        { q: "ما هي عاصمة صربيا؟", a: "بلغراد", reward: 650 },
+        { q: "ما هي عاصمة أيرلندا؟", a: "دبلن", reward: 600 },
+        { q: "ما هي عاصمة سنغافورة؟", a: "سنغافورة", reward: 400 },
+        { q: "ما هي عاصمة بنغلاديش؟", a: "دكا", reward: 650 },
+        { q: "ما هي عاصمة أفغانستان؟", a: "كابول", reward: 550 },
+        { q: "ما هي عاصمة طاجيكستان؟", a: "دوشنبه", reward: 850 },
+        { q: "ما هي عاصمة أوزبكستان؟", a: "طشقند", reward: 800 }
+    ]
+};
+
+// --- (3) الوظائف المساعدة العامة ---
+
+function getUser(userId, username, firstName) {
+    const uKey = String(userId);
+
+    if (!globalData.bank[uKey]) {
+        globalData.bank[uKey] = {
+            money: 100,
+            hasAccount: false,
+            accountNumber: null,
+            marriage: null,
+            lastSalary: 0,
+            lastBakhsh: 0,
+            username: username || null,
+            name: firstName || 'مستخدم'
+        };
+    }
+
+    if (username) globalData.bank[uKey].username = username;
+    if (firstName) globalData.bank[uKey].name = firstName;
+
+    return globalData.bank[uKey];
+}
+
+function generateAccount() {
+    return 'SA' + Math.floor(1000000000 + Math.random() * 9000000000);
+}
+
+function formatMoney(n) {
+    return `${n.toLocaleString('ar-SA')} ﷼`;
+}
+
+function saveUserMoney(userId, newTotal) {
+    const uKey = String(userId);
+    if (globalData.bank[uKey]) {
+        globalData.bank[uKey].money = newTotal;
+        saveDB();
+    }
+}
+
+// --- (4) دوال البنك والألعاب ---
+
+function createAccount(userId, username, firstName) {
+    const u = getUser(userId, username, firstName);
+    if (u.hasAccount) {
+        return `⚠️ لديك حساب بالفعل!\nرقم حسابك: \`${u.accountNumber}\``;
+    }
+    u.hasAccount = true;
+    u.accountNumber = generateAccount();
+    saveDB();
+    return `✅ **تم إنشاء حسابك البنكي بنجاح!**\n💳 رقم الحساب: \`${u.accountNumber}\`\n💰 الرصيد الأول: ${formatMoney(u.money)}`;
+}
+
+function getAccountInfo(userId, username, firstName) {
+    const u = getUser(userId, username, firstName);
+    return `🏦 *بيانات حسابك البنكي:*\n👤 الاسم: ${u.name}\n💳 رقم الحساب: \`${u.accountNumber || 'لا يوجد (اكتب: فتح حساب)'}\`\n💰 الرصيد الحالي: *${formatMoney(u.money)}*`;
+}
+
+function playLuck(userId, amount) {
+    const u = getUser(userId);
+    if (isNaN(amount) || amount <= 0) return '❌ يرجى كتابة مبلغ صحيح! مثال: `حظ 1000`';
+    if (u.money < amount) return `❌ رصيدك غير كافٍ! رصيدك الحالي: ${formatMoney(u.money)}`;
+
+    let isWin = Math.random() < 0.5;
+    if (isWin) {
+        let newTotal = u.money + amount;
+        saveUserMoney(userId, newTotal);
+        return `🎰 *يا حظك العالي!* 🎉\n\nربحت: +${formatMoney(amount)}\n💰 رصيدك الحالي: ${formatMoney(newTotal)}`;
+    } else {
+        let newTotal = u.money - amount;
+        saveUserMoney(userId, newTotal);
+        return `💥 *الحظ ما حالفك هذه المرة!* 💔\n\nخسرت: -${formatMoney(amount)}\n💰 رصيدك الحالي: ${formatMoney(newTotal)}`;
+    }
+}
+
+function playInvestment(userId, amount) {
+    const u = getUser(userId);
+    if (isNaN(amount) || amount <= 0) return '❌ يرجى كتابة مبلغ صحيح! مثال: `استثمار 1000`';
+    if (u.money < amount) return `❌ رصيدك غير كافٍ للاستثمار! رصيدك الحالي: ${formatMoney(u.money)}`;
+
+    let isWin = Math.random() < 0.5;
+    let profitPercent = Math.floor(Math.random() * 50) + 10;
+    let changeAmount = Math.floor(amount * (profitPercent / 100));
+
+    if (isWin) {
+        let newTotal = u.money + changeAmount;
+        saveUserMoney(userId, newTotal);
+        return `📈 *صفقة استثمارية ناجحة!* 🎉\n\nربحت نسبة ${profitPercent}%: +${formatMoney(changeAmount)}\n💰 رصيدك الحالي: ${formatMoney(newTotal)}`;
+    } else {
+        let newTotal = u.money - changeAmount;
+        saveUserMoney(userId, newTotal);
+        return `📉 *انخفضت الأسهم وخسر استثمارك!* 💔\n\nخسرت نسبة ${profitPercent}%: -${formatMoney(changeAmount)}\n💰 رصيدك الحالي: ${formatMoney(newTotal)}`;
+    }
+}
+
+function getTopUsers() {
+    let usersList = [];
+    for (let id in globalData.bank) {
+        let userObj = globalData.bank[id];
+        if (userObj.money !== undefined) {
+            usersList.push({
+                name: userObj.name || 'مستخدم',
+                username: userObj.username ? userObj.username : null,
+                money: userObj.money
+            });
+        }
+    }
+
+    usersList.sort((a, b) => b.money - a.money);
+    let top10 = usersList.slice(0, 10);
+
+    if (top10.length === 0) return '🏆 لا توجد أرقام مسجلة للتوب بعد.';
+
+    let msg = '🏆 *قائمة أغنى 10 أثرياء:*\n━━━━━━━━━━━━━━━\n\n';
+    top10.forEach((u, i) => {
+        let badge = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '👤';
+        let userTag = u.username ? ` (${u.username})` : '';
+        msg += `${badge} *${i + 1}.* ${u.name}${userTag} ⟵ \`${formatMoney(u.money)}\`\n`;
+    });
+
+    return msg;
+}
+
+function checkWeeklyReset() {
+    const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
+    if (Date.now() - globalData.lastReset >= ONE_WEEK) {
+        globalData.bank = {};
+        globalData.lastReset = Date.now();
+        saveDB();
+        return true;
+    }
+    return false;
+}
+
+// --- (5) نظام الزواج والخلع والطلاق المطور ---
+
+const DEFAULT_MARRIAGE_COST = 100000;
+
+function marry(senderId, targetId) {
+    const sender = getUser(senderId);
+    const target = getUser(targetId);
+
+    if (senderId === targetId) return '❌ لا يمكنك الزواج من نفسك!';
+    if (sender.marriage) return '⚠️ أنت متزوج بالفعل! لا يمكنك الزواج مجدداً.';
+    if (target.marriage) return '⚠️ الشخص الذي تحاول الزواج منه متزوج بالفعل!';
+
+    if (sender.money < DEFAULT_MARRIAGE_COST) {
+        return `❌ تكلفة الزواج والمهر هي ${formatMoney(DEFAULT_MARRIAGE_COST)}. رصيدك غير كافٍ!`;
+    }
+
+    sender.money -= DEFAULT_MARRIAGE_COST;
+    const marriageDate = new Date().toLocaleDateString('ar-SA');
+
+    sender.marriage = { 
+        spouseId: String(targetId), 
+        spouseName: target.name || 'الشريك', 
+        role: 'husband', 
+        dowry: DEFAULT_MARRIAGE_COST,
+        date: marriageDate 
+    };
+
+    target.marriage = { 
+        spouseId: String(senderId), 
+        spouseName: sender.name || 'الشريك', 
+        role: 'wife', 
+        dowry: DEFAULT_MARRIAGE_COST,
+        date: marriageDate 
+    };
+
+    saveDB();
+
+    return `💍 *مبروك! تم عقد القران بنجاح* 🎉\n\n🤵‍♂️ **الزوج:** ${sender.name}\n👰‍♀️ **الزوجة:** ${target.name}\n📅 **تاريخ العقد:** ${marriageDate}\n💰 **المهر المدفوع:** ${formatMoney(DEFAULT_MARRIAGE_COST)}`;
+}
+
+function divorce(userId) {
+    const user = getUser(userId);
+
+    if (!user.marriage) return '❌ أنت لست متزوجاً أصلاً لتطلق!';
+
+    const spouseId = user.marriage.spouseId;
+    const spouse = globalData.bank[spouseId];
+    const dowry = user.marriage.dowry || DEFAULT_MARRIAGE_COST;
+
+    user.marriage = null;
+    if (spouse) {
+        spouse.marriage = null;
+        spouse.money += dowry; 
+    }
+
+    saveDB();
+
+    return `💔 *تم الطلاق رسمياً.*\n💰 تم تحويل مبلغ ${formatMoney(dowry)} للمطلقة كتعويض/مؤخر. نرجو لكم التوفيق!`;
+}
+
+function khul(userId) {
+    const user = getUser(userId);
+
+    if (!user.marriage) return '❌ أنت لست متزوجاً لرفع دعوى خلع!';
+
+    const spouseId = user.marriage.spouseId;
+    const spouse = globalData.bank[spouseId];
+    const dowry = user.marriage.dowry || DEFAULT_MARRIAGE_COST;
+
+    if (user.money < dowry) {
+        return `❌ لطلب الخلع يجب إرجاع المهر كاملاً (${formatMoney(dowry)}). رصيدك الحالي لا يكفي!`;
+    }
+
+    user.money -= dowry;
+    if (spouse) {
+        spouse.money += dowry;
+        spouse.marriage = null;
+    }
+
+    user.marriage = null;
+    saveDB();
+
+    return `⚖️ *تم الخلع بنجاح.*\n💸 تم رد المهر وقدره ${formatMoney(dowry)} للزوج وإلغاء عقد الزواج.`;
+}
+
+function getStatus(userId) {
+    const user = getUser(userId);
+
+    if (user.marriage) {
+        const partnerTitle = user.marriage.role === 'husband' ? 'الزوجة' : 'الزوج';
+        return `❤️ *الحالة الاجتماعية:* متزوج/ة\n👤 **${partnerTitle}:** ${user.marriage.spouseName}\n📅 **تاريخ الزواج:** ${user.marriage.date}`;
+    } else {
+        return '💔 *الحالة الاجتماعية:* أعزب / غير متزوج';
+    }
+}
+
+// --- (6) تشغيل البوت مع دمج نظام Pairing Code المعزز ---
+
+let pairingCodeRequested = false;
+
+async function startBot() {
+    loadDB();
+    checkWeeklyReset();
+
+    const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+    const sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false // إيقاف طباعة الـ QR لإننا نستخدم كود الاقتران
+    });
+
+    sock.ev.on("creds.update", saveCreds);
+
+    sock.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (!state.creds.registered && !pairingCodeRequested && (connection === 'connecting' || qr)) {
+            pairingCodeRequested = true;
+            setTimeout(async () => {
+                try {
+                    const phoneNumber = "96566044383"; // رقم التلفون بدون رموز زائدة
+                    console.log("⏳ جاري طلب كود الاقتران من خوادم الواتساب...");
+                    let code = await sock.requestPairingCode(phoneNumber);
+                    code = code?.match(/.{1,4}/g)?.join("-") || code; 
+                    console.log(`\n========================================`);
+                    console.log(`🔑 كود الربط الخاص بك هو: ${code}`);
+                    console.log(`========================================\n`);
+                } catch (err) {
+                    console.error("❌ فشل طلب كود الربط:", err.message || err);
+                    pairingCodeRequested = false;
+                }
+            }, 4000);
+        }
+
+        if (connection === "close") {
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            console.log("🔄 انقطع الاتصال، جاري إعادة المحاولة...");
+            if (shouldReconnect) {
+                setTimeout(startBot, 5000);
+            }
+        } else if (connection === "open") {
+            console.log("✅ تم الاتصال بنجاح بـ WhatsApp!");
+        }
+    });
+
+    // --- (7) معالجة الرسائل والأوامر ---
+
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify') return;
+        const msg = messages[0];
+        if (!msg.message || msg.key.fromMe) return;
+
+        const rawSender = msg.key.participant || msg.key.remoteJid;
+        const cleanSenderId = rawSender.split('@')[0].split(':')[0];
+        const pushName = msg.pushName || "مستخدم";
+
+        const text = (
+            msg.message?.conversation || 
+            msg.message?.extendedTextMessage?.text || 
+            ""
+        ).trim();
+
+        if (!text) return;
+
+        const jid = msg.key.remoteJid;
+
+        getUser(cleanSenderId, null, pushName);
+
+        // --- (A) التحقق من وجود لعبة قائمة ---
+        if (activeGames[jid]) {
+            const currentGame = activeGames[jid];
+            const userAnswer = text.trim().toLowerCase();
+            const correctAnswer = currentGame.answer.trim().toLowerCase();
+
+            if (userAnswer === correctAnswer) {
+                clearTimeout(currentGame.timeout);
+
+                const userObj = getUser(cleanSenderId, null, pushName);
+                const newTotal = userObj.money + currentGame.reward;
+                saveUserMoney(cleanSenderId, newTotal);
+
+                const winMsg = `🎉 *إجابة صحيحة يا بطل!* (${pushName})\n\n💰 **الجائزة:** +${formatMoney(currentGame.reward)}\n💳 **رصيدك الجديد:** ${formatMoney(newTotal)}`;
+                await sock.sendMessage(jid, { text: winMsg }, { quoted: msg });
+
+                delete activeGames[jid];
+                return;
+            }
+        }
+
+        // --- (B) بدء لعبة جديدة ---
+        const gameType = text.trim();
+        if (GAMES_BANK[gameType]) {
+            if (activeGames[jid]) {
+                await sock.sendMessage(jid, { text: '⚠️ هناك لعبة قائمة بالفعل في هذا الشات! أجب عن السؤال الحالي أولاً.' }, { quoted: msg });
+                return;
+            }
+
+            const questions = GAMES_BANK[gameType];
+            const randomQuestion = questions[Math.floor(Math.random() * questions.length)];
+
+            const timer = setTimeout(async () => {
+                if (activeGames[jid]) {
+                    delete activeGames[jid];
+                    await sock.sendMessage(jid, { 
+                        text: `⏰ *انتهى الوقت!* (60 ثانية)\nلم يقم أحد بالإجابة الصحيحة. تم إلغاء اللعبة، يمكنك البدء من جديد.` 
+                    });
+                }
+            }, 60000);
+
+            activeGames[jid] = {
+                question: randomQuestion.q,
+                answer: randomQuestion.a,
+                reward: randomQuestion.reward,
+                type: gameType,
+                timeout: timer
+            };
+
+            const promptMsg = `🎮 *لعبة ${gameType.toUpperCase()}*\n\n❓ **السؤال:**\n${randomQuestion.q}\n\n💰 **الجائزة:** ${formatMoney(randomQuestion.reward)}\n⏰ **الفرصة:** 60 ثانية\n✍️ أرسل الإجابة الصحيحة للفوز!`;
+            await sock.sendMessage(jid, { text: promptMsg }, { quoted: msg });
+            return;
+        }
+
+        // --- (C) أجهزة البنك والزواج والأوامر ---
+
+        if (text === 'فتح حساب' || text === 'إنشاء حساب' || text === 'انشاء حساب') {
+            const res = createAccount(cleanSenderId, null, pushName);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text === 'بنكي' || text === 'رصيدي' || text === 'حسابي') {
+            const res = getAccountInfo(cleanSenderId, null, pushName);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text.startsWith('حظ ')) {
+            const amount = parseInt(text.split(' ')[1]);
+            const res = playLuck(cleanSenderId, amount);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text.startsWith('استثمار ')) {
+            const amount = parseInt(text.split(' ')[1]);
+            const res = playInvestment(cleanSenderId, amount);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text === 'التوب') {
+            const res = getTopUsers();
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text.startsWith('زواج')) {
+            const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+            const mentionedJid = contextInfo?.mentionedJid?.[0];
+            const quotedParticipant = contextInfo?.participant;
+
+            const targetJid = mentionedJid || quotedParticipant;
+
+            if (!targetJid) {
+                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على رسالة الشخص الذي تريد الزواج منه!' }, { quoted: msg });
+                return;
+            }
+
+            const targetId = targetJid.split('@')[0].split(':')[0];
+            const res = marry(cleanSenderId, targetId);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text === 'طلاق') {
+            const res = divorce(cleanSenderId);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text === 'خلع') {
+            const res = khul(cleanSenderId);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text === 'حالي' || text === 'زواجي') {
+            const res = getStatus(cleanSenderId);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text === 'زوجتي') {
+            const user = getUser(cleanSenderId);
+            if (!user.marriage) {
+                await sock.sendMessage(jid, { text: '❌ أنت لست متزوجاً بعد!' }, { quoted: msg });
+            } else {
+                const res = `👰‍♀️ **زوجتك المسجلة هي:** ${user.marriage.spouseName}\n📅 **تاريخ الزواج:** ${user.marriage.date}`;
+                await sock.sendMessage(jid, { text: res }, { quoted: msg });
+            }
+        }
+
+        else if (text === 'زوجي') {
+            const user = getUser(cleanSenderId);
+            if (!user.marriage) {
+                await sock.sendMessage(jid, { text: '❌ أنتِ لستِ متزوجة بعد!' }, { quoted: msg });
+            } else {
+                const res = `🤵‍♂️ **زوجك المسجل هو:** ${user.marriage.spouseName}\n📅 **تاريخ الزواج:** ${user.marriage.date}`;
+                await sock.sendMessage(jid, { text: res }, { quoted: msg });
+            }
+        }
+    });
+}
+
+// بدء تشغيل البوت
+startBot();
