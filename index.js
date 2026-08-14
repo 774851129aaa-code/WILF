@@ -469,7 +469,11 @@ function playInvestment(userId, amount) {
 
 function getTopUsers() {
     let usersList = [];
+    const BOT_NUMBER = "96566044383"; // استثناء البوت من القائمة
+
     for (let id in globalData.bank) {
+        if (id === BOT_NUMBER) continue; // يتخطى البوت
+
         let userObj = globalData.bank[id];
         if (userObj.money !== undefined) {
             usersList.push({
@@ -506,11 +510,9 @@ function checkWeeklyReset() {
     return false;
 }
 
-// --- (5) نظام الزواج والخلع والطلاق المطور ---
+// --- (5) نظام الزواج والخلع والطلاق والشحن ---
 
-const DEFAULT_MARRIAGE_COST = 100000;
-
-function marry(senderId, targetId) {
+function marry(senderId, targetId, customDowry) {
     const sender = getUser(senderId);
     const target = getUser(targetId);
 
@@ -518,18 +520,26 @@ function marry(senderId, targetId) {
     if (sender.marriage) return '⚠️ أنت متزوج بالفعل! لا يمكنك الزواج مجدداً.';
     if (target.marriage) return '⚠️ الشخص الذي تحاول الزواج منه متزوج بالفعل!';
 
-    if (sender.money < DEFAULT_MARRIAGE_COST) {
-        return `❌ تكلفة الزواج والمهر هي ${formatMoney(DEFAULT_MARRIAGE_COST)}. رصيدك غير كافٍ!`;
+    const dowry = parseInt(customDowry);
+    if (isNaN(dowry) || dowry <= 0) {
+        return '❌ يرجى تحديد قيمة المهر بشكل صحيح!\nمثال: `زواج 1000` (مع منشن أو رد)';
     }
 
-    sender.money -= DEFAULT_MARRIAGE_COST;
+    if (sender.money < dowry) {
+        return `❌ رصيدك غير كافٍ لدفع هذا المهر! رصيدك الحالي: ${formatMoney(sender.money)}`;
+    }
+
+    // خصم المهر وتحويله فوراً للزوجة
+    sender.money -= dowry;
+    target.money += dowry;
+
     const marriageDate = new Date().toLocaleDateString('ar-SA');
 
     sender.marriage = { 
         spouseId: String(targetId), 
         spouseName: target.name || 'الشريك', 
         role: 'husband', 
-        dowry: DEFAULT_MARRIAGE_COST,
+        dowry: dowry,
         date: marriageDate 
     };
 
@@ -537,13 +547,13 @@ function marry(senderId, targetId) {
         spouseId: String(senderId), 
         spouseName: sender.name || 'الشريك', 
         role: 'wife', 
-        dowry: DEFAULT_MARRIAGE_COST,
+        dowry: dowry,
         date: marriageDate 
     };
 
     saveDB();
 
-    return `💍 *مبروك! تم عقد القران بنجاح* 🎉\n\n🤵‍♂️ **الزوج:** ${sender.name}\n👰‍♀️ **الزوجة:** ${target.name}\n📅 **تاريخ العقد:** ${marriageDate}\n💰 **المهر المدفوع:** ${formatMoney(DEFAULT_MARRIAGE_COST)}`;
+    return `💍 *مبروك! تم عقد القران بنجاح* 🎉\n\n🤵‍♂️ **الزوج:** ${sender.name}\n👰‍♀️ **الزوجة:** ${target.name}\n📅 **تاريخ العقد:** ${marriageDate}\n💰 **المهر المدفوع:** ${formatMoney(dowry)}`;
 }
 
 function divorce(userId) {
@@ -553,7 +563,7 @@ function divorce(userId) {
 
     const spouseId = user.marriage.spouseId;
     const spouse = globalData.bank[spouseId];
-    const dowry = user.marriage.dowry || DEFAULT_MARRIAGE_COST;
+    const dowry = user.marriage.dowry || 100000;
 
     user.marriage = null;
     if (spouse) {
@@ -573,7 +583,7 @@ function khul(userId) {
 
     const spouseId = user.marriage.spouseId;
     const spouse = globalData.bank[spouseId];
-    const dowry = user.marriage.dowry || DEFAULT_MARRIAGE_COST;
+    const dowry = user.marriage.dowry || 100000;
 
     if (user.money < dowry) {
         return `❌ لطلب الخلع يجب إرجاع المهر كاملاً (${formatMoney(dowry)}). رصيدك الحالي لا يكفي!`;
@@ -602,6 +612,20 @@ function getStatus(userId) {
     }
 }
 
+function addMoney(targetId, amount) {
+    const target = getUser(targetId);
+    const addAmt = parseInt(amount);
+
+    if (isNaN(addAmt) || addAmt <= 0) {
+        return '❌ يرجى كتابة مبلغ شحن صحيح!';
+    }
+
+    target.money += addAmt;
+    saveDB();
+
+    return `✅ **تم شحن الرصيد بنجاح!**\n👤 **المستفيد:** ${target.name}\n➕ **المبلغ المضاف:** ${formatMoney(addAmt)}\n💰 **الرصيد الجديد:** ${formatMoney(target.money)}`;
+}
+
 // --- (6) تشغيل البوت مع دمج نظام Pairing Code المعزز ---
 
 let pairingCodeRequested = false;
@@ -613,7 +637,7 @@ async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false // إيقاف طباعة الـ QR لإننا نستخدم كود الاقتران
+        printQRInTerminal: false
     });
 
     sock.ev.on("creds.update", saveCreds);
@@ -625,7 +649,7 @@ async function startBot() {
             pairingCodeRequested = true;
             setTimeout(async () => {
                 try {
-                    const phoneNumber = "96566044383"; // رقم التلفون بدون رموز زائدة
+                    const phoneNumber = "96566044383"; 
                     console.log("⏳ جاري طلب كود الاقتران من خوادم الواتساب...");
                     let code = await sock.requestPairingCode(phoneNumber);
                     code = code?.match(/.{1,4}/g)?.join("-") || code; 
@@ -727,7 +751,7 @@ async function startBot() {
             return;
         }
 
-        // --- (C) أجهزة البنك والزواج والأوامر ---
+        // --- (C) الأوامر والخدمات البنكية والزواج ---
 
         if (text === 'فتح حساب' || text === 'إنشاء حساب' || text === 'انشاء حساب') {
             const res = createAccount(cleanSenderId, null, pushName);
@@ -756,6 +780,7 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
+        // --- أمر الزواج المطور (مبلغ مفتوح + منشن/رد) ---
         else if (text.startsWith('زواج')) {
             const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
             const mentionedJid = contextInfo?.mentionedJid?.[0];
@@ -764,12 +789,53 @@ async function startBot() {
             const targetJid = mentionedJid || quotedParticipant;
 
             if (!targetJid) {
-                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على رسالة الشخص الذي تريد الزواج منه!' }, { quoted: msg });
+                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على رسالة الشخص الذي تريد الزواج منه وتحديد المبلغ!\nمثال: `زواج 5000` (مع منشن أو رد)' }, { quoted: msg });
+                return;
+            }
+
+            const args = text.split(' ');
+            const customDowry = args.find(arg => !isNaN(arg) && parseInt(arg) > 0);
+
+            if (!customDowry) {
+                await sock.sendMessage(jid, { text: '❌ يرجى كتابة قيمة المهر بعد كلمة زواج!\nمثال: `زواج 1000` أو `زواج 1500`' }, { quoted: msg });
                 return;
             }
 
             const targetId = targetJid.split('@')[0].split(':')[0];
-            const res = marry(cleanSenderId, targetId);
+            const res = marry(cleanSenderId, targetId, customDowry);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        // --- أمر الشحن الخاص برقمك الكويتي فقط ---
+        else if (text.startsWith('شحن')) {
+            const ADMIN_NUMBER = "96566044383"; // رقمك المعرف للشحن فقط
+
+            if (cleanSenderId !== ADMIN_NUMBER) {
+                await sock.sendMessage(jid, { text: '🚫 هذا الأمر مخصص لمالك البوت فقط!' }, { quoted: msg });
+                return;
+            }
+
+            const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+            const mentionedJid = contextInfo?.mentionedJid?.[0];
+            const quotedParticipant = contextInfo?.participant;
+
+            const targetJid = mentionedJid || quotedParticipant;
+
+            if (!targetJid) {
+                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على الشخص المراد شحن رصيده!\nمثال: `شحن 1000`' }, { quoted: msg });
+                return;
+            }
+
+            const args = text.split(' ');
+            const amount = args.find(arg => !isNaN(arg) && parseInt(arg) > 0);
+
+            if (!amount) {
+                await sock.sendMessage(jid, { text: '❌ يرجى تحديد المبلغ المالي لشحنه!\nمثال: `شحن 5000` (مع منشن)' }, { quoted: msg });
+                return;
+            }
+
+            const targetId = targetJid.split('@')[0].split(':')[0];
+            const res = addMoney(targetId, amount);
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
