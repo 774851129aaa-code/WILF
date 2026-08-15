@@ -1071,14 +1071,21 @@ function divorce(userId) {
     const spouse = globalData.bank[spouseId];
     const dowry = user.marriage.dowry || 100000;
 
+    // التحقق من الرصيد وخصم المهر عند الطلاق
+    if (user.money < dowry) {
+        return `❌ رصيدك الحالي (${formatMoney(user.money)}) لا يكفي لدفع قيمة المهر/المؤخر (${formatMoney(dowry)}). تم رفض الطلاق!`;
+    }
+
+    user.money -= dowry;
     user.marriage = null;
+
     if (spouse) {
         spouse.marriage = null;
         spouse.money += dowry; 
     }
 
     saveDB();
-    return `💔 *تم الطلاق رسمياً.*\n💰 تم تحويل مبلغ ${formatMoney(dowry)} للمطلقة كتعويض/مؤخر. نرجو لكم التوفيق!`;
+    return `💔 *تم الطلاق رسمياً.*\n💰 تم خصم مبلغ ${formatMoney(dowry)} وتحويله للطرف الآخر كمؤخر صداق. نرجو لكم التوفيق!`;
 }
 
 function khul(userId) {
@@ -1090,16 +1097,17 @@ function khul(userId) {
     const dowry = user.marriage.dowry || 100000;
 
     if (user.money < dowry) {
-        return `❌ لطلب الخلع يجب إرجاع المهر كاملاً (${formatMoney(dowry)}). رصيدك الحالي لا يكفي!`;
+        return `❌ لطلب الخلع يجب إرجاع المهر كاملاً (${formatMoney(dowry)}). رصيدك الحالي لا يكفي! (${formatMoney(user.money)})`;
     }
 
     user.money -= dowry;
+    user.marriage = null;
+
     if (spouse) {
-        spouse.money += dowry;
         spouse.marriage = null;
+        spouse.money += dowry;
     }
 
-    user.marriage = null;
     saveDB();
     return `⚖️ *تم الخلع بنجاح.*\n💸 تم رد المهر وقدره ${formatMoney(dowry)} للزوج وإلغاء عقد الزواج.`;
 }
