@@ -390,11 +390,9 @@ function checkUserLoan(userId, u) {
             u.money -= loanAmt;
             u.loan = null;
         } else {
-            // المستخدم أفلس بالبنك وليس لديه رصيد كافي لسداد القرض
             let remainingLoan = loanAmt - u.money;
             u.money = 0;
 
-            // البحث عن شركة يملكها المستخدم
             let userCompName = null;
             for (let cName in globalData.companies) {
                 if (globalData.companies[cName].ownerId === String(userId)) {
@@ -405,12 +403,10 @@ function checkUserLoan(userId, u) {
 
             if (userCompName) {
                 let comp = globalData.companies[userCompName];
-                // هل خزينة الشركة تكفي لسداد باقي القرض؟
                 if (comp.treasury >= remainingLoan) {
                     comp.treasury -= remainingLoan;
                     u.loan = null;
                 } else {
-                    // الشركة ليس لديها مبلغ القرض الكافي -> تصفير الشركة وإرجاع حقوق المستثمرين
                     if (comp.investors) {
                         for (let invId in comp.investors) {
                             let invAmount = comp.investors[invId];
@@ -512,7 +508,6 @@ function getAccountInfo(userId, username, firstName) {
     return `🏦 *بيانات حسابك البنكي:*\n👤 الاسم: ${u.name}\n💳 رقم الحساب: \`${u.accountNumber || 'لا يوجد (اكتب: فتح حساب)'}\`\n💰 الرصيد الحالي: *${formatMoney(u.money)}*${jobInfo}${shieldInfo}${loanInfo}${jailInfo}`;
 }
 
-// --- نظام التحويل ---
 function transferMoney(senderId, targetId, amount) {
     if (senderId === targetId) return '❌ لا يمكنك تحويل الأموال لنفسك!';
     const sender = getUser(senderId);
@@ -536,7 +531,6 @@ function transferMoney(senderId, targetId, amount) {
     return `💸 *تم التحويل بنجاح!* ✅\n📤 **المحول:** ${sender.name}\n📥 **المستلم:** ${target.name}\n💰 **المبلغ:** ${formatMoney(transAmt)}`;
 }
 
-// --- نظام القروض ---
 function takeLoan(userId, amount) {
     const u = getUser(userId);
     if (u.loan) return `❌ لديك قرض سابق بقيمة ${formatMoney(u.loan.amount)} لم تقم بسداده بعد! اكتب ` + '`سداد القرض`';
@@ -572,7 +566,6 @@ function payLoan(userId) {
     return `✅ *تم سداد القرض بنجاح وإبراء ذمتك البنكية!* 🎉\n💰 رصيدك الحالي: ${formatMoney(u.money)}`;
 }
 
-// --- نظام درع الحماية ---
 function buyShield(userId) {
     const u = getUser(userId);
     if (!u.hasAccount) return '❌ يجب أن يكون لديك حساب بنكي لشراء درع الحماية! اكتب `فتح حساب`';
@@ -594,7 +587,6 @@ function buyShield(userId) {
     return `🛡️ *تم شراء وتفعيل درع الحماية بنجاح!* ✅\n💰 **التكلفة:** ${formatMoney(shieldCost)}\n⏳ **المدة:** 24 ساعة كاملة (أنت محمي تماماً من سرقات الآخرين).\n💳 رصيدك الحالي: ${formatMoney(u.money)}`;
 }
 
-// --- نظام السرقة والسجن والمحامي والدفع ---
 function stealMoney(thiefId, targetId) {
     if (thiefId === targetId) return '❌ لا يمكنك سرقة نفسك!';
     const thief = getUser(thiefId);
@@ -648,7 +640,6 @@ function payBail(payerId, targetId) {
     return `⚖️ *تم توكيل المحامي ودفع الغرامة بنجاح!* 🏛️\n🤝 قام ${payer.name} بدفع غرامة وقدرها ${formatMoney(bailAmount)} وتم الإفراج عن ${target.name} من السجن! 🎉`;
 }
 
-// --- نظام الشركات والموظفين والاستثمار وإدارة بيع الشركة ---
 function createCompany(userId, compName) {
     if (!compName) return '❌ يرجى كتابة اسم الشركة!\nمثال: `انشاء شركة [الاسم]`';
     if (globalData.companies[compName]) return '❌ هذه الشركة مسجلة مسبقاً، اختر اسمًا آخر!';
@@ -664,14 +655,13 @@ function createCompany(userId, compName) {
         level: 1,
         treasury: 0,
         employees: [],
-        investors: {} // لتسجيل استثمارات الأصدقاء والمستثمرين
+        investors: {} 
     };
     saveDB();
 
     return `🏢 *مبروك! تم تأسيس شركتك بنجاح* 🎉\n📛 **اسم الشركة:** ${compName}\n👤 **المالك:** ${u.name}\n💰 **تكلفة التأسيس:** ${formatMoney(cost)}`;
 }
 
-// ميزة بيع الشركة مع إرجاع أموال المستثمرين بالكامل
 function sellCompany(userId, compName) {
     if (!compName) return '❌ يرجى كتابة اسم الشركة المراد بيعها!\nمثال: `بيع شركة [الاسم]`';
     if (!globalData.companies[compName]) return '❌ هذه الشركة غير موجودة!';
@@ -698,7 +688,6 @@ function sellCompany(userId, compName) {
         u.money += ownerBonus;
     }
 
-    // إزالة وظائف الموظفين التابعين للشركة المتباعة
     if (comp.employees) {
         comp.employees.forEach(empId => {
             if (globalData.bank[empId] && globalData.bank[empId].job === compName) {
@@ -726,7 +715,6 @@ function investCompany(userId, compName, amount) {
     u.money -= invAmt;
     comp.treasury += invAmt;
 
-    // تسجيل أو تحديث استثمار العضو في الشركة
     if (!comp.investors) comp.investors = {};
     comp.investors[String(userId)] = (comp.investors[String(userId)] || 0) + invAmt;
 
@@ -735,7 +723,6 @@ function investCompany(userId, compName, amount) {
     return `📈 *تم ضخ استثمار بنجاح في شركة (${compName})* 💼\n👤 **المستثمر:** ${u.name}\n➕ **المبلغ المودع:** ${formatMoney(invAmt)}\n💰 **خزينة الشركة الإجمالية:** ${formatMoney(comp.treasury)}\n💡 *ملاحظة:* يمكنك الآن سحب أرباح استثمارك في أي وقت عبر أمر \`سحب أرباح ${compName}\`.`;
 }
 
-// دالة سحب أرباح الاستثمار للمستثمرين في شركات الأصدقاء
 function claimInvestmentProfit(userId, compName) {
     if (!globalData.companies[compName]) return '❌ هذه الشركة غير موجودة!';
     const comp = globalData.companies[compName];
@@ -1575,15 +1562,8 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
-        // --- نظام الشحن والسحب عبر المجموعة الخاصة المشروطة بالرمز السري ---
+        // --- نظام الشحن والسحب المفتوح في كل المجموعات بالرمز السري ---
         else if (text.startsWith('شحن') || text.startsWith('سحب')) {
-            const MY_SPECIAL_GROUP_ID = "1234567890-group@g.us"; 
-
-            if (jid !== MY_SPECIAL_GROUP_ID) {
-                await sock.sendMessage(jid, { text: '🚫 أوامر الشحن والسحب لا تعمل إلا داخل مجموعة الشحن الخاصة بك!' }, { quoted: msg });
-                return;
-            }
-
             if (!text.includes("annoor77485")) {
                 await sock.sendMessage(jid, { text: '❌ عذراً، خطأ في الرمز السري! يجب كتابة الرمز الصحيح `annoor77485` لإتمام عملية الشحن أو السحب.\nمثال: `شحن 5000 annoor77485` (مع منشن)' }, { quoted: msg });
                 return;
