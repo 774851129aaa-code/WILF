@@ -511,7 +511,7 @@ function getAccountInfo(userId, username, firstName) {
     const u = getUser(userId, username, firstName);
     let vipBadge = u.isVip ? `\n⭐ *الرتبة:* VIP المميزة ✨` : `\n👤 *الرتبة:* عادية`;
     let loanInfo = u.loan ? `\n📌 *قرض غير مسدد:* ${formatMoney(u.loan.amount)} (بنسبة 110%)` : `\n📌 *القروض:* لا يوجد`;
-    let jailInfo = (u.jailUntil && u.jailUntil > Date.now()) ? `\n🚨 *الحالة:* مسجون في السجن 🚔 (باقي ${Math.ceil((u.jailUntil - Date.now())/(60*1000))} دقيقة)` : `\n🟢 *الحالة:* طليق وحر`;
+    let jailInfo = (u.jailUntil && u.jailUntil > Date.now()) ? `\n🚨 *الحالة:* مسجون في السجن 🚔 (باقي ${Math.ceil((u.jailUntil - Date.now())/(60*1000))} دقيقة، والغرامة: ${formatMoney(u.fine || 2000)})` : `\n🟢 *الحالة:* طليق وحر`;
     let jobInfo = u.job ? `\n💼 *الوظيفة:* موظف في شركة (${u.job})` : `\n💼 *الوظيفة:* عاطل عن العمل (ابحث عن شركة لتوظيفك)`;
     let shieldInfo = (u.shieldUntil && u.shieldUntil > Date.now()) ? `\n🛡️ *درع الحماية:* مفعل (باقي ${Math.ceil((u.shieldUntil - Date.now()) / (60 * 60 * 1000))} ساعة)` : `\n🛡️ *درع الحماية:* غير مفعل`;
     return `🏦 *بيانات حسابك البنكي:*\n👤 الاسم: ${u.name}${vipBadge}\n💳 رقم الحساب: \`${u.accountNumber || 'لا يوجد (اكتب: فتح حساب)'}\`\n💰 الرصيد الحالي: *${formatMoney(u.money)}*${jobInfo}${shieldInfo}${loanInfo}${jailInfo}`;
@@ -522,7 +522,7 @@ function buyVIP(userId) {
     if (!u.hasAccount) return '❌ يجب أن يكون لديك حساب بنكي لشراء رتبة VIP! اكتب `فتح حساب`';
     if (u.isVip) return '⭐ أنت تمتلك رتبة VIP بالفعل!';
 
-    const vipCost = 1000000; // مليون عملة افتراضية
+    const vipCost = 1000000;
     if (u.money < vipCost) {
         return `❌ رصيدك غير كافٍ لشراء رتبة VIP! سعرها ${formatMoney(vipCost)}، ورصيدك الحالي ${formatMoney(u.money)}`;
     }
@@ -546,7 +546,6 @@ function transferMoney(senderId, targetId, amount) {
     const transAmt = parseInt(amount);
     if (isNaN(transAmt) || transAmt <= 0) return '❌ يرجى كتابة مبلغ صحيح للتحويل!\nمثال: `تحويل 1000` (مع منشن)';
 
-    // تطبيق خصم الضرائب للتحويل (5% للعام، و 0% لحاملي VIP)
     let taxRate = sender.isVip ? 0 : 0.05;
     let taxAmount = Math.floor(transAmt * taxRate);
     let totalDeduction = transAmt + taxAmount;
@@ -647,7 +646,7 @@ function stealMoney(thiefId, targetId) {
         thief.jailUntil = Date.now() + (2 * 60 * 60 * 1000);
         thief.fine = 2000;
         saveDB();
-        return `🚨 *فشلت عملية السرقة وتم القبض عليك!* 🚔\n👮‍♂️ تم زجك في **السجن** لمدة *ساعتين* ولا يمكنك اللعب بالبوت، وعليك غرامة ${formatMoney(thief.fine)}!\n💡 يمكن لمحامٍ أو صديق دفع غرامتك عبر أمر \`محامي\` (بالمنشن).`;
+        return `🚨 *فشلت عملية السرقة وتم القبض عليك!* 🚔\n👮‍♂️ تم زجك في **السجن** لمدة *ساعتين* ولا يمكنك اللعب بالبوت، وعليك غرامة ${formatMoney(thief.fine)}!\n💡 يمكنك دفع غرامتك بنفسك عبر كتابة \`دفع الغرامة\`، أو توكيل محامي لصديقك بالمنشن.`;
     }
 }
 
@@ -669,7 +668,11 @@ function payBail(payerId, targetId) {
     target.fine = 0;
     saveDB();
 
-    return `⚖️ *تم توكيل المحامي ودفع الغرامة بنجاح!* 🏛️\n🤝 قام ${payer.name} بدفع غرامة وقدرها ${formatMoney(bailAmount)} وتم الإفراج عن ${target.name} من السجن! 🎉`;
+    if (payerId === targetId) {
+        return `⚖️ *تم دفع غرامتك والإفراج عنك بنجاح!* 🎉\n💰 المبلغ المقتطع: ${formatMoney(bailAmount)}\n💳 رصيدك الحالي: ${formatMoney(payer.money)}`;
+    } else {
+        return `⚖️ *تم توكيل المحامي ودفع الغرامة بنجاح!* 🏛️\n🤝 قام ${payer.name} بدفع غرامة وقدرها ${formatMoney(bailAmount)} وتم الإفراج عن ${target.name} من السجن! 🎉`;
+    }
 }
 
 function createCompany(userId, compName) {
@@ -836,8 +839,6 @@ function fireMember(ownerId, targetId, compName) {
     return `🛑 *تم فصل الموظف* ${target.name} من شركة ${compName} بنجاح.`;
 }
 
-// --- دوال الميزات الجديدة للشركات ---
-
 function insureCompany(userId, compName) {
     if (!compName) return '❌ يرجى كتابة اسم الشركة المراد تأمينها!\nمثال: `أمر تأمين شركة [الاسم]`';
     if (!globalData.companies[compName]) return '❌ هذه الشركة غير موجودة!';
@@ -846,7 +847,7 @@ function insureCompany(userId, compName) {
     if (comp.ownerId !== String(userId)) return '❌ لست مالك هذه الشركة!';
     if (comp.isInsured) return '🛡️ هذه الشركة مؤمنة بالفعل ولا تحتاج إلى تأمين إضافي حالياً!';
 
-    let insuranceCost = 15000; // تكلفة شراء التأمين
+    let insuranceCost = 15000;
     if (comp.treasury < insuranceCost) {
         return `❌ خزينة الشركة لا تحتوي على المبلغ الكافي لشراء التأمين! التكلفة المطلوبة: ${formatMoney(insuranceCost)} (رصيد الخزينة: ${formatMoney(comp.treasury)})`;
     }
@@ -868,7 +869,7 @@ function upgradeCompany(userId, compName) {
     let currentLevel = comp.level || 1;
     if (currentLevel >= 5) return '⭐ لقد وصلت شركتك إلى الحد الأقصى من الترقية (المستوى 5)!';
 
-    let upgradeCost = currentLevel * 20000; // تكلفة تتصاعد حسب المستوى
+    let upgradeCost = currentLevel * 20000;
     if (comp.treasury < upgradeCost) {
         return `❌ خزينة الشركة (${formatMoney(comp.treasury)}) لا تكفي للترقية إلى المستوى ${currentLevel + 1}!\n💰 التكلفة المطلوبة: ${formatMoney(upgradeCost)}`;
     }
@@ -898,7 +899,6 @@ function workForCompany(userId) {
         return '❌ للأسف، الشركة التي تعمل بها تم إغلاقها أو حذفها!';
     }
 
-    // ميزة VIP: أرباح مضاعفة من أمر العمل (ضعف الراتب وضعف أرباح الشركة المضافة)
     let salary = u.isVip ? 1600 : 800; 
     let companyProfit = u.isVip ? 5000 : 2500; 
 
@@ -1050,10 +1050,12 @@ function getTopData() {
     let topCompanies = [];
     for (let cName in globalData.companies) {
         let comp = globalData.companies[cName];
+        let ownerData = globalData.bank[comp.ownerId];
+        let realOwnerName = ownerData ? ownerData.name : (comp.ownerName || 'مالك الشركة');
         topCompanies.push({
             name: cName,
             ownerId: comp.ownerId,
-            ownerName: comp.ownerName,
+            ownerName: realOwnerName,
             treasury: comp.treasury
         });
     }
@@ -1086,7 +1088,7 @@ function getTopData() {
             let badge = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '🏢';
             let ownerJid = c.ownerId.includes('@') ? c.ownerId : c.ownerId + '@s.whatsapp.net';
             mentions.push(ownerJid);
-            msg += `${badge} *${i + 1}.* شركة: *${c.name}*\n   👤 المالك: @${c.ownerId.split('@')[0]}\n   💰 الخزينة: \`${formatMoney(c.treasury)}\`\n\n`;
+            msg += `${badge} *${i + 1}.* شركة: *${c.name}*\n   👤 المالك: ${c.ownerName} (@${c.ownerId.split('@')[0]})\n   💰 الخزينة: \`${formatMoney(c.treasury)}\`\n\n`;
         });
     }
 
@@ -1278,7 +1280,8 @@ function getHelpMenu() {
 
 🥷 *أوامر السرقة والسجن والمحامي:*
 🔹 \`سرقة\` (مع منشن/رد) ⟵ لمحاولة سرقة أموال شخص آخر (احذر من السجن لساعتين!).
-🔹 \`محامي\` أو \`دفع الغرامة\` (مع منشن/رد) ⟵ لدفع غرامة شخص مسجون وإخراجه فوراً.
+🔹 \`دفع الغرامة\` أو \`فك اسري\` ⟵ لدفع غرامتك بنفسك والخروج من السجن فوراً.
+🔹 \`محامي\` (مع منشن/رد) ⟵ لدفع غرامة شخص مسجون آخر وإخراجه.
 
 🏢 *أوامر الشركات والموظفين والاستثمار:*
 🔹 \`انشاء شركة [الاسم]\` ⟵ لتأسيس شركتك الخاصة (التكلفة 10,000 ريال).
@@ -1403,9 +1406,9 @@ async function startBot() {
 
         // --- نظام السجن ---
         if (user.jailUntil && user.jailUntil > Date.now()) {
-            if (text !== 'بنكي' && text !== 'رصيدي' && text !== 'حسابي' && !text.startsWith('محامي') && !text.startsWith('دفع الغرامة')) {
+            if (text !== 'بنكي' && text !== 'رصيدي' && text !== 'حسابي' && !text.startsWith('محامي') && !text.startsWith('دفع الغرامة') && !text.startsWith('فك اسري')) {
                 let remainingMins = Math.ceil((user.jailUntil - Date.now()) / (60 * 1000));
-                await sock.sendMessage(jid, { text: `🚨 *أنت مسجون خلف القضبان!* 🚔\n⏳ باقي على خروجك: ${remainingMins} دقيقة ولا يمكنك اللعب بالبوت حالياً.\n💡 يمكن لأحد أصدقائك دفع غرامتك عبر أمر \`محامي\` (بالمنشن).` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `🚨 *أنت مسجون خلف القضبان!* 🚔\n⏳ باقي على خروجك: ${remainingMins} دقيقة.\n💡 يمكنك دفع غرامتك بنفسك عبر كتابة \`دفع الغرامة\`، أو توكيل محامي لصديقك بالمنشن.` }, { quoted: msg });
                 return;
             }
         }
@@ -1529,18 +1532,19 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
-        else if (text.startsWith('محامي') || text.startsWith('دفع الغرامة')) {
+        // --- دفع الغرامة (لل سجين نفسه أو توكيل محامي لشخص آخر) ---
+        else if (text === 'دفع الغرامة' || text === 'فك اسري' || text.startsWith('محامي')) {
             const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
             const mentionedJid = contextInfo?.mentionedJid?.[0];
             const quotedParticipant = contextInfo?.participant;
             const targetJid = mentionedJid || quotedParticipant;
 
-            if (!targetJid) {
-                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على رسالة الشخص المسجون لدفع غرامته!\nمثال: `محامي` (مع منشن)' }, { quoted: msg });
-                return;
+            let targetId = cleanSenderId; // الافتراضي هو دفع غرامة السجين لنفسه
+
+            if (targetJid) {
+                targetId = targetJid.split('@')[0].split(':')[0];
             }
 
-            const targetId = targetJid.split('@')[0].split(':')[0];
             const res = payBail(cleanSenderId, targetId);
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
