@@ -829,11 +829,8 @@ function playInvestment(userId, amount) {
 
 function getTopUsers() {
     let usersList = [];
-    const BOT_NUMBER = "967774851129"; 
 
     for (let id in globalData.bank) {
-        if (id === BOT_NUMBER) continue;
-
         let userObj = globalData.bank[id];
         if (userObj.money !== undefined) {
             usersList.push({
