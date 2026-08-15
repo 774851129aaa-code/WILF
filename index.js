@@ -387,12 +387,16 @@ function getUser(userId, username, firstName) {
             loan: null,
             lastSalary: 0,
             lastBakhsh: 0,
+            jailUntil: 0,
+            fine: 0,
             username: username || null,
             name: firstName || 'مستخدم'
         };
     }
 
     if (!globalData.bank[uKey].loan) globalData.bank[uKey].loan = null;
+    if (!globalData.bank[uKey].jailUntil) globalData.bank[uKey].jailUntil = 0;
+    if (!globalData.bank[uKey].fine) globalData.bank[uKey].fine = 0;
     if (username) globalData.bank[uKey].username = username;
     if (firstName) globalData.bank[uKey].name = firstName;
 
@@ -431,7 +435,8 @@ function createAccount(userId, username, firstName) {
 function getAccountInfo(userId, username, firstName) {
     const u = getUser(userId, username, firstName);
     let loanInfo = u.loan ? `\n📌 *قرض غير مسدد:* ${formatMoney(u.loan.amount)}` : `\n📌 *القروض:* لا يوجد`;
-    return `🏦 *بيانات حسابك البنكي:*\n👤 الاسم: ${u.name}\n💳 رقم الحساب: \`${u.accountNumber || 'لا يوجد (اكتب: فتح حساب)'}\`\n💰 الرصيد الحالي: *${formatMoney(u.money)}*${loanInfo}`;
+    let jailInfo = (u.jailUntil && u.jailUntil > Date.now()) ? `\n🚨 *الحالة:* مسجون في السجن 🚔 (باقي ${Math.ceil((u.jailUntil - Date.now())/(60*1000))} دقيقة)` : `\n🟢 *الحالة:* طليق وحر`;
+    return `🏦 *بيانات حسابك البنكي:*\n👤 الاسم: ${u.name}\n💳 رقم الحساب: \`${u.accountNumber || 'لا يوجد (اكتب: فتح حساب)'}\`\n💰 الرصيد الحالي: *${formatMoney(u.money)}*${loanInfo}${jailInfo}`;
 }
 
 // --- نظام التحويل (تحويل أو .تحويل) ---
@@ -488,6 +493,56 @@ function payLoan(userId) {
     saveDB();
 
     return `✅ *تم سداد القرض بنجاح وإبراء ذمتك البنكية!* 🎉\n💰 رصيدك الحالي: ${formatMoney(u.money)}`;
+}
+
+// --- نظام السرقة والسجن والمحامي والدفع ---
+function stealMoney(thiefId, targetId) {
+    if (thiefId === targetId) return '❌ لا يمكنك سرقة نفسك!';
+    const thief = getUser(thiefId);
+    const target = getUser(targetId);
+
+    if (!thief.hasAccount) return '❌ يجب أن يكون لديك حساب بنكي لتتمكن من السرقة! اكتب `فتح حساب`';
+    if (!target.hasAccount) return '❌ هذا الشخص ليس لديه حساب بنكي!';
+    if (target.money < 500) return '❌ هذا الشخص فقير جداً، لا يملك ما يكفي للسرقة!';
+
+    let isSuccess = Math.random() < 0.45; // نسبة نجاح 45%
+    if (isSuccess) {
+        let stealPercent = Math.floor(Math.random() * 15) + 10; // من 10% إلى 24%
+        let stolenAmount = Math.floor(target.money * (stealPercent / 100));
+        if (stolenAmount < 100) stolenAmount = 100;
+
+        target.money -= stolenAmount;
+        thief.money += stolenAmount;
+        saveDB();
+        return `🥷 *عملية سرقة ناجحة بامتياز!* 💰\nتمكن ${thief.name} من سرقة ${formatMoney(stolenAmount)} من ${target.name}! 😎`;
+    } else {
+        // فشل السرقة: السجن لمدة ساعتين وغرامة
+        thief.jailUntil = Date.now() + (2 * 60 * 60 * 1000);
+        thief.fine = 2000;
+        saveDB();
+        return `🚨 *فشلت عملية السرقة وتم القبض عليك!* 🚔\n👮‍♂️ تم زجك في **السجن** لمدة *ساعتين* ولا يمكنك اللعب بالبوت، وعليك غرامة ${formatMoney(thief.fine)}!\n💡 يمكن لصديقك أو محامٍ دفع غرامتك وإخراجك عبر أمر \`محامي\` أو \`دفع الغرامة\` (بالمنشن).`;
+    }
+}
+
+function payBail(payerId, targetId) {
+    const payer = getUser(payerId);
+    const target = getUser(targetId);
+
+    if (!target.jailUntil || target.jailUntil <= Date.now()) {
+        return `❌ هذا الشخص ليس مسجوناً أصلاً!`;
+    }
+
+    let bailAmount = target.fine || 2000;
+    if (payer.money < bailAmount) {
+        return `❌ رصيدك غير كافٍ لدفع الغرامة (${formatMoney(bailAmount)}) للإفراج عن ${target.name}!`;
+    }
+
+    payer.money -= bailAmount;
+    target.jailUntil = 0;
+    target.fine = 0;
+    saveDB();
+
+    return `⚖️ *تم توكيل المحامي ودفع الغرامة بنجاح!* 🏛️\n🤝 قام ${payer.name} بدفع غرامة وقدرها ${formatMoney(bailAmount)} وتم الإفراج عن ${target.name} من السجن! 🎉`;
 }
 
 // --- نظام الشركات والأرباح العشوائية (ربح وخسارة) ---
@@ -814,6 +869,10 @@ function getHelpMenu() {
 🔹 \`حظ [المبلغ]\` ⟵ لعبة الحظ السريع (ربح أو خسارة).
 🔹 \`استثمار [المبلغ]\` ⟵ استثمار أموالك بنسبة ربح/خسارة عشوائية.
 
+🥷 *أوامر السرقة والسجن والمحامي:*
+🔹 \`سرقة\` (مع منشن/رد) ⟵ لمحاولة سرقة أموال شخص آخر (احذر من الفشل والسجن لمدة ساعتين!).
+🔹 \`محامي\` أو \`دفع الغرامة\` (مع منشن/رد) ⟵ لدفع غرامة شخص مسجون وإخراجه فوراً من السجن.
+
 🏢 *أوامر الشركات والأعمال:*
 🔹 \`انشاء شركة [الاسم]\` ⟵ لتأسيس شركتك الخاصة (التكلفة 10,000 ريال).
 🔹 \`استثمار شركة [الاسم] [المبلغ]\` ⟵ ضخ استثمار في خزينة الشركة.
@@ -928,7 +987,16 @@ async function startBot() {
 
         const jid = msg.key.remoteJid;
 
-        getUser(cleanSenderId, null, pushName);
+        const user = getUser(cleanSenderId, null, pushName);
+
+        // --- نظام السجن: منع المستخدم المسجون من اللعب أو تنفيذ الأوامر لمدة السجن (ساعتين) ---
+        if (user.jailUntil && user.jailUntil > Date.now()) {
+            if (text !== 'بنكي' && text !== 'رصيدي' && text !== 'حسابي' && !text.startsWith('محامي') && !text.startsWith('دفع الغرامة')) {
+                let remainingMins = Math.ceil((user.jailUntil - Date.now()) / (60 * 1000));
+                await sock.sendMessage(jid, { text: `🚨 *أنت مسجون خلف القضبان!* 🚔\n⏳ باقي على خروجك: ${remainingMins} دقيقة ولا يمكنك اللعب بالبوت حالياً.\n💡 يمكن لأحد أصدقائك أو محامٍ دفع غرامتك عبر أمر \`محامي\` أو \`دفع الغرامة\` (بالمنشن أو الرد).` }, { quoted: msg });
+                return;
+            }
+        }
 
         // --- (A) التحقق من الإجابة على أي لعبة نشطة في الشات ---
         if (activeGames[jid] && activeGames[jid].length > 0) {
@@ -1016,6 +1084,40 @@ async function startBot() {
         else if (text.startsWith('استثمار ') && !text.startsWith('استثمار شركة')) {
             const amount = parseInt(text.split(' ')[1]);
             const res = playInvestment(cleanSenderId, amount);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        // --- ميزة السرقة ---
+        else if (text.startsWith('سرقة')) {
+            const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+            const mentionedJid = contextInfo?.mentionedJid?.[0];
+            const quotedParticipant = contextInfo?.participant;
+            const targetJid = mentionedJid || quotedParticipant;
+
+            if (!targetJid) {
+                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على رسالة الشخص المراد سرقته!\nمثال: `سرقة` (مع منشن)' }, { quoted: msg });
+                return;
+            }
+
+            const targetId = targetJid.split('@')[0].split(':')[0];
+            const res = stealMoney(cleanSenderId, targetId);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        // --- ميزة المحامي / دفع الغرامة لإخراج المسجون ---
+        else if (text.startsWith('محامي') || text.startsWith('دفع الغرامة')) {
+            const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+            const mentionedJid = contextInfo?.mentionedJid?.[0];
+            const quotedParticipant = contextInfo?.participant;
+            const targetJid = mentionedJid || quotedParticipant;
+
+            if (!targetJid) {
+                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على رسالة الشخص المسجون لدفع غرامته وإخراجه!\nمثال: `محامي` (مع منشن)' }, { quoted: msg });
+                return;
+            }
+
+            const targetId = targetJid.split('@')[0].split(':')[0];
+            const res = payBail(cleanSenderId, targetId);
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
