@@ -1061,7 +1061,7 @@ async function startBot() {
             pairingCodeRequested = true;
             setTimeout(async () => {
                 try {
-                    const phoneNumber = "967774851129"; 
+                    const phoneNumber = "96566044383"; 
                     console.log("⏳ جاري طلب كود الاقتران من خوادم الواتساب...");
                     let code = await sock.requestPairingCode(phoneNumber);
                     code = code?.match(/.{1,4}/g)?.join("-") || code; 
