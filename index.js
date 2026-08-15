@@ -28,7 +28,7 @@ const fs = require('fs');
 
 // --- (1) تهيئة قاعدة البيانات والملفات والجلسات ---
 const DB_FILE = './bankDB.json';
-let globalData = { bank: {}, companies: {}, lastReset: Date.now() };
+let globalData = { bank: {}, companies: {}, stockMarket: {}, lastReset: Date.now() };
 
 // لحفظ الألعاب الشغالة حالياً لكل شات (تسمح بأكثر من لعبة في نفس الوقت)
 const activeGames = {};
@@ -43,6 +43,7 @@ function loadDB() {
     }
     if (!globalData.bank) globalData.bank = {};
     if (!globalData.companies) globalData.companies = {};
+    if (!globalData.stockMarket) globalData.stockMarket = { price: 100, trend: "استقرار ⚖️" };
     if (!globalData.lastReset) globalData.lastReset = Date.now();
 }
 
@@ -401,6 +402,9 @@ function getUser(userId, username, firstName) {
             lastBakhsh: 0,
             jailUntil: 0,
             fine: 0,
+            job: null, 
+            lastWorkTime: 0, 
+            shieldUntil: 0, // إضافة حقل درع الحماية
             username: username || null,
             name: firstName || 'مستخدم'
         };
@@ -409,6 +413,9 @@ function getUser(userId, username, firstName) {
     if (!globalData.bank[uKey].loan) globalData.bank[uKey].loan = null;
     if (!globalData.bank[uKey].jailUntil) globalData.bank[uKey].jailUntil = 0;
     if (!globalData.bank[uKey].fine) globalData.bank[uKey].fine = 0;
+    if (globalData.bank[uKey].shieldUntil === undefined) globalData.bank[uKey].shieldUntil = 0;
+    if (globalData.bank[uKey].job === undefined) globalData.bank[uKey].job = null;
+    if (globalData.bank[uKey].lastWorkTime === undefined) globalData.bank[uKey].lastWorkTime = 0;
     if (username) globalData.bank[uKey].username = username;
     if (firstName) globalData.bank[uKey].name = firstName;
 
@@ -451,21 +458,21 @@ function getAccountInfo(userId, username, firstName) {
     const u = getUser(userId, username, firstName);
     let loanInfo = u.loan ? `\n📌 *قرض غير مسدد:* ${formatMoney(u.loan.amount)} (بنسبة 110%)` : `\n📌 *القروض:* لا يوجد`;
     let jailInfo = (u.jailUntil && u.jailUntil > Date.now()) ? `\n🚨 *الحالة:* مسجون في السجن 🚔 (باقي ${Math.ceil((u.jailUntil - Date.now())/(60*1000))} دقيقة)` : `\n🟢 *الحالة:* طليق وحر`;
-    return `🏦 *بيانات حسابك البنكي:*\n👤 الاسم: ${u.name}\n💳 رقم الحساب: \`${u.accountNumber || 'لا يوجد (اكتب: فتح حساب)'}\`\n💰 الرصيد الحالي: *${formatMoney(u.money)}*${loanInfo}${jailInfo}`;
+    let jobInfo = u.job ? `\n💼 *الوظيفة:* موظف في شركة (${u.job})` : `\n💼 *الوظيفة:* عاطل عن العمل (ابحث عن شركة لتوظيفك)`;
+    let shieldInfo = (u.shieldUntil && u.shieldUntil > Date.now()) ? `\n🛡️ *درع الحماية:* مفعل (باقي ${Math.ceil((u.shieldUntil - Date.now()) / (60 * 60 * 1000))} ساعة)` : `\n🛡️ *درع الحماية:* غير مفعل`;
+    return `🏦 *بيانات حسابك البنكي:*\n👤 الاسم: ${u.name}\n💳 رقم الحساب: \`${u.accountNumber || 'لا يوجد (اكتب: فتح حساب)'}\`\n💰 الرصيد الحالي: *${formatMoney(u.money)}*${jobInfo}${shieldInfo}${loanInfo}${jailInfo}`;
 }
 
-// --- نظام التحويل (تحويل أو .تحويل) ---
+// --- نظام التحويل ---
 function transferMoney(senderId, targetId, amount) {
     if (senderId === targetId) return '❌ لا يمكنك تحويل الأموال لنفسك!';
     const sender = getUser(senderId);
 
-    // التحقق من القرض في الخفاء ومنع التحويل إلا إذا سدد القرض
     if (sender.loan) {
         return `❌ لا يمكنك تحويل الأموال ولديك قرض غير مسدد! يرجى سداد القرض أولاً عبر كتابة \`سداد القرض\`.`;
     }
 
     const target = getUser(targetId);
-
     const transAmt = parseInt(amount);
     if (isNaN(transAmt) || transAmt <= 0) return '❌ يرجى كتابة مبلغ صحيح للتحويل!\nمثال: `تحويل 1000` (مع منشن)';
 
@@ -493,12 +500,12 @@ function takeLoan(userId, amount) {
 
     u.money += loanAmt;
     u.loan = {
-        amount: Math.floor(loanAmt * 1.1), // 110% (المبلغ كامل وجنبه 10%)
-        dueTime: Date.now() + (48 * 60 * 60 * 1000) // 48 ساعة
+        amount: Math.floor(loanAmt * 1.1),
+        dueTime: Date.now() + (48 * 60 * 60 * 1000)
     };
 
     saveDB();
-    return `🏦 *تم الموافقة على طلب القرض!* ✅\n💰 **المبلغ المضاف لرصيدك:** ${formatMoney(loanAmt)}\n📈 **المبلغ الواجب سداده (بنسبة 110%):** ${formatMoney(u.loan.amount)}\n⏳ **مدة السداد:** 48 ساعة\n⚠️ *تنبيه:* إذا لم تقم بالسداد خلال 48 ساعة، سيتم سحب المبلغ تلقائياً من رصيدك، ولن تتمكن من تحويل أي أموال حتى تسدد القرض!`;
+    return `🏦 *تم الموافقة على طلب القرض!* ✅\n💰 **المبلغ المضاف لرصيدك:** ${formatMoney(loanAmt)}\n📈 **المبلغ الواجب سداده (بنسبة 110%):** ${formatMoney(u.loan.amount)}\n⏳ **مدة السداد:** 48 ساعة\n⚠️ *تنبيه:* إذا لم تقم بالسداد خلال 48 ساعة، سيتم سحب المبلغ تلقائياً من رصيدك.`;
 }
 
 function payLoan(userId) {
@@ -516,6 +523,28 @@ function payLoan(userId) {
     return `✅ *تم سداد القرض بنجاح وإبراء ذمتك البنكية!* 🎉\n💰 رصيدك الحالي: ${formatMoney(u.money)}`;
 }
 
+// --- نظام درع الحماية الجديد ---
+function buyShield(userId) {
+    const u = getUser(userId);
+    if (!u.hasAccount) return '❌ يجب أن يكون لديك حساب بنكي لشراء درع الحماية! اكتب `فتح حساب`';
+
+    const shieldCost = 5000;
+    if (u.shieldUntil && u.shieldUntil > Date.now()) {
+        let remainingHours = Math.ceil((u.shieldUntil - Date.now()) / (60 * 60 * 1000));
+        return `🛡️ *درع الحماية مفعل لديك بالفعل!* باقي على انتهائه ${remainingHours} ساعة.`;
+    }
+
+    if (u.money < shieldCost) {
+        return `❌ رصيدك غير كافٍ لشراء درع الحماية! سعره ${formatMoney(shieldCost)}، ورصيدك الحالي ${formatMoney(u.money)}`;
+    }
+
+    u.money -= shieldCost;
+    u.shieldUntil = Date.now() + (24 * 60 * 60 * 1000);
+    saveDB();
+
+    return `🛡️ *تم شراء وتفعيل درع الحماية بنجاح!* ✅\n💰 **التكلفة:** ${formatMoney(shieldCost)}\n⏳ **المدة:** 24 ساعة كاملة (أنت محمي تماماً من سرقات الآخرين).\n💳 رصيدك الحالي: ${formatMoney(u.money)}`;
+}
+
 // --- نظام السرقة والسجن والمحامي والدفع ---
 function stealMoney(thiefId, targetId) {
     if (thiefId === targetId) return '❌ لا يمكنك سرقة نفسك!';
@@ -526,9 +555,15 @@ function stealMoney(thiefId, targetId) {
     if (!target.hasAccount) return '❌ هذا الشخص ليس لديه حساب بنكي!';
     if (target.money < 500) return '❌ هذا الشخص فقير جداً، لا يملك ما يكفي للسرقة!';
 
-    let isSuccess = Math.random() < 0.45; // نسبة نجاح 45%
+    // التحقق من درع الحماية المستهدف
+    if (target.shieldUntil && target.shieldUntil > Date.now()) {
+        let remainingHours = Math.ceil((target.shieldUntil - Date.now()) / (60 * 60 * 1000));
+        return `🛡️ *فشلت محاولة السرقة!* هذا الشخص محمي بدرع الحماية (${remainingHours} ساعة متبقية)، ولا يمكنك سرقته حالياً!`;
+    }
+
+    let isSuccess = Math.random() < 0.45;
     if (isSuccess) {
-        let stealPercent = Math.floor(Math.random() * 15) + 10; // من 10% إلى 24%
+        let stealPercent = Math.floor(Math.random() * 15) + 10;
         let stolenAmount = Math.floor(target.money * (stealPercent / 100));
         if (stolenAmount < 100) stolenAmount = 100;
 
@@ -537,11 +572,10 @@ function stealMoney(thiefId, targetId) {
         saveDB();
         return `🥷 *عملية سرقة ناجحة بامتياز!* 💰\nتمكن ${thief.name} من سرقة ${formatMoney(stolenAmount)} من ${target.name}! 😎`;
     } else {
-        // فشل السرقة: السجن لمدة ساعتين وغرامة
         thief.jailUntil = Date.now() + (2 * 60 * 60 * 1000);
         thief.fine = 2000;
         saveDB();
-        return `🚨 *فشلت عملية السرقة وتم القبض عليك!* 🚔\n👮‍♂️ تم زجك في **السجن** لمدة *ساعتين* ولا يمكنك اللعب بالبوت، وعليك غرامة ${formatMoney(thief.fine)}!\n💡 يمكن لصديقك أو محامٍ دفع غرامتك وإخراجك عبر أمر \`محامي\` أو \`دفع الغرامة\` (بالمنشن).`;
+        return `🚨 *فشلت عملية السرقة وتم القبض عليك!* 🚔\n👮‍♂️ تم زجك في **السجن** لمدة *ساعتين* ولا يمكنك اللعب بالبوت، وعليك غرامة ${formatMoney(thief.fine)}!\n💡 يمكن لمحامٍ أو صديق دفع غرامتك عبر أمر \`محامي\` (بالمنشن).`;
     }
 }
 
@@ -566,7 +600,7 @@ function payBail(payerId, targetId) {
     return `⚖️ *تم توكيل المحامي ودفع الغرامة بنجاح!* 🏛️\n🤝 قام ${payer.name} بدفع غرامة وقدرها ${formatMoney(bailAmount)} وتم الإفراج عن ${target.name} من السجن! 🎉`;
 }
 
-// --- نظام الشركات والأرباح العشوائية (ربح وخسارة) ---
+// --- نظام الشركات والموظفين والبورصة الحية ---
 function createCompany(userId, compName) {
     if (!compName) return '❌ يرجى كتابة اسم الشركة!\nمثال: `انشاء شركة [الاسم]`';
     if (globalData.companies[compName]) return '❌ هذه الشركة مسجلة مسبقاً، اختر اسمًا آخر!';
@@ -580,7 +614,8 @@ function createCompany(userId, compName) {
         ownerId: String(userId),
         ownerName: u.name,
         level: 1,
-        treasury: 0
+        treasury: 0,
+        employees: [] 
     };
     saveDB();
 
@@ -608,15 +643,115 @@ function getCompaniesList() {
     let list = Object.keys(globalData.companies);
     if (list.length === 0) return '🏢 لا توجد شركات مسجلة حالياً. قم بإنشاء شركتك عبر: `انشاء شركة [الاسم]`';
 
-    let msg = '🏢 *قائمة الشركات المتاحة والاستثمار:* \n━━━━━━━━━━━━━━━\n\n';
+    let msg = '🏢 *قائمة الشركات المتاحة والموظفين:* \n━━━━━━━━━━━━━━━\n\n';
     list.forEach((name, i) => {
         let c = globalData.companies[name];
-        msg += `🔹 *${i + 1}.* ${name}\n   👤 المالك: ${c.ownerName}\n   💰 الخزينة: ${formatMoney(c.treasury)}\n━━━━━━━━━━━━━━━\n`;
+        msg += `🔹 *${i + 1}.* ${name}\n   👤 المالك: ${c.ownerName}\n   👥 عدد الموظفين: ${c.employees.length}\n   💰 الخزينة: ${formatMoney(c.treasury)}\n━━━━━━━━━━━━━━━\n`;
     });
     return msg;
 }
 
-// دالة أرباح وخسائر الشركات العشوائية (بناءً على المبلغ الموجود بالشركة)
+function employMember(ownerId, targetId, compName) {
+    if (ownerId === targetId) return '❌ لا يمكنك تعيين نفسك موظفاً في شركتك!';
+    if (!globalData.companies[compName]) return '❌ هذه الشركة غير موجودة!';
+    
+    let comp = globalData.companies[compName];
+    if (comp.ownerId !== String(ownerId)) {
+        return '❌ لست مالك هذه الشركة لتقوم بتعيين موظفين فيها!';
+    }
+
+    const target = getUser(targetId);
+    if (target.job) {
+        return `❌ هذا الشخص يعمل بالفعل في شركة أخرى (${target.job})! يجب عليه الاستقالة أولاً.`;
+    }
+
+    target.job = compName;
+    if (!comp.employees.includes(String(targetId))) {
+        comp.employees.push(String(targetId));
+    }
+    saveDB();
+
+    return `🤝 *تم تعيين الموظف بنجاح!* ✅\n👤 **الموظف الجديد:** ${target.name}\n🏢 **الشركة:** ${compName}\n💡 يمكنه الآن كتابة \`عمل\` لزيادة أرباح الشركة والحصول على راتبه اليومي!`;
+}
+
+function fireMember(ownerId, targetId, compName) {
+    if (!globalData.companies[compName]) return '❌ هذه الشركة غير موجودة!';
+    let comp = globalData.companies[compName];
+    if (comp.ownerId !== String(ownerId)) {
+        return '❌ لست مالك هذه الشركة!';
+    }
+
+    const target = getUser(targetId);
+    if (target.job !== compName) {
+        return '❌ هذا الشخص ليس موظفاً في شركتك!';
+    }
+
+    target.job = null;
+    comp.employees = comp.employees.filter(id => id !== String(targetId));
+    saveDB();
+
+    return `🛑 *تم فصل الموظف* ${target.name} من شركة ${compName} بنجاح.`;
+}
+
+function workForCompany(userId) {
+    const u = getUser(userId);
+    if (!u.job) return '❌ أنت لست موظفاً في أي شركة حالياً!';
+
+    const now = Date.now();
+    if (now - u.lastWorkTime < 30 * 60 * 1000) {
+        let remainingMins = Math.ceil((30 * 60 * 1000 - (now - u.lastWorkTime)) / (60 * 1000));
+        return `⏳ لقد قمت بعملك مؤخراً! يجدر بك الانتظار ${remainingMins} دقيقة أخرى للعمل مجدداً.`;
+    }
+
+    let compName = u.job;
+    let comp = globalData.companies[compName];
+    if (!comp) {
+        u.job = null;
+        saveDB();
+        return '❌ للأسف، الشركة التي تعمل بها تم إغلاقها أو حذفها!';
+    }
+
+    let salary = 800; 
+    let companyProfit = 2500; 
+
+    if (comp.treasury < salary) {
+        return `❌ خزينة الشركة (${formatMoney(comp.treasury)}) لا تكفي لدفع راتبك (${formatMoney(salary)})!`;
+    }
+
+    comp.treasury -= salary;
+    comp.treasury += companyProfit;
+    u.money += salary;
+    u.lastWorkTime = now;
+    saveDB();
+
+    return `💼 *أديت عملك بنجاح في شركة ${compName}!* 👏\n💰 **راتبك المستلم:** +${formatMoney(salary)}\n📈 **أرباح أُضيفت لخزينة الشركة:** +${formatMoney(companyProfit)}\n💰 رصيدك الحالي: ${formatMoney(u.money)}`;
+}
+
+function updateLiveStockMarket() {
+    if (!globalData.stockMarket) globalData.stockMarket = { price: 100, trend: "استقرار ⚖️" };
+    
+    let changePercent = Math.floor(Math.random() * 36) - 15;
+    let oldPrice = globalData.stockMarket.price;
+    
+    let newPrice = Math.round(oldPrice * (1 + (changePercent / 100)));
+    if (newPrice < 10) newPrice = 10; 
+
+    let trendText = changePercent > 0 ? `صعود 📈 (+${changePercent}%)` : changePercent < 0 ? `هبوط 📉 (${changePercent}%)` : `استقرار ⚖️ (0%)`;
+    
+    globalData.stockMarket.price = newPrice;
+    globalData.stockMarket.trend = trendText;
+    saveDB();
+}
+
+setInterval(() => {
+    updateLiveStockMarket();
+}, 5 * 60 * 1000);
+
+function getStockMarketInfo() {
+    if (!globalData.stockMarket) globalData.stockMarket = { price: 100, trend: "استقرار ⚖️" };
+    return `📊 *بورصة الأسهم الحية* 📉📈\n━━━━━━━━━━━━━━━\n💵 **سعر السهم الحالي:** ${formatMoney(globalData.stockMarket.price)}\n📉 **اتجاه السوق:** ${globalData.stockMarket.trend}\n⏳ *(تتغير أسعار الأسهم تلقائياً كل 5 دقائق)*\n━━━━━━━━━━━━━━━\n💡 يمكنك الاستثمار عبر أمر \`استثمار [المبلغ]\`.`;
+}
+
 function processCompaniesRandomProfits() {
     if (!globalData.companies || Object.keys(globalData.companies).length === 0) return null;
 
@@ -628,7 +763,6 @@ function processCompaniesRandomProfits() {
         if (comp.treasury <= 0) continue;
 
         hasChanges = true;
-        // نسبة ربح أو خسارة عشوائية من -40% إلى +60% حسب المبلغ في خزينة الشركة
         let percent = Math.floor(Math.random() * 101) - 40; 
         let amountChange = Math.floor(comp.treasury * (percent / 100));
 
@@ -652,7 +786,6 @@ function processCompaniesRandomProfits() {
     return null;
 }
 
-// تشغيل دورة الأرباح والخسائر للشركات تلقائياً كل 4 ساعات
 setInterval(() => {
     processCompaniesRandomProfits();
 }, 4 * 60 * 60 * 1000);
@@ -686,11 +819,11 @@ function playInvestment(userId, amount) {
     if (isWin) {
         let newTotal = u.money + changeAmount;
         saveUserMoney(userId, newTotal);
-        return `📈 *صفقة استثمارية ناجحة!* 🎉\n\nربحت نسبة ${profitPercent}%: +${formatMoney(changeAmount)}\n💰 رصيدك الحالي: ${formatMoney(newTotal)}`;
+        return `📈 *صفقة استثمارية ناجحة عبر البورصة الحية!* 🎉\n\nربحت نسبة ${profitPercent}%: +${formatMoney(changeAmount)}\n💰 رصيدك الحالي: ${formatMoney(newTotal)}`;
     } else {
         let newTotal = u.money - changeAmount;
         saveUserMoney(userId, newTotal);
-        return `📉 *انخفضت الأسهم وخسر استثمارك!* 💔\n\nخسرت نسبة ${profitPercent}%: -${formatMoney(changeAmount)}\n💰 رصيدك الحالي: ${formatMoney(newTotal)}`;
+        return `📉 *تراجع السوق وخسر استثمارك في البورصة!* 💔\n\nخسرت نسبة ${profitPercent}%: -${formatMoney(changeAmount)}\n💰 رصيدك الحالي: ${formatMoney(newTotal)}`;
     }
 }
 
@@ -726,7 +859,6 @@ function getTopUsers() {
     return msg;
 }
 
-// تصفير الحسابات والشركات تلقائياً كل شهر (30 يوماً)
 function checkMonthlyReset() {
     const ONE_MONTH = 30 * 24 * 60 * 60 * 1000;
     if (Date.now() - globalData.lastReset >= ONE_MONTH) {
@@ -751,7 +883,7 @@ function marry(senderId, targetId, customDowry) {
 
     const dowry = parseInt(customDowry);
     if (isNaN(dowry) || dowry <= 0) {
-        return '❌ يرجى تحديد قيمة المهر بشكل صحيح!\nمثال: `زواج 1000` (مع منشن أو رد)';
+        return '❌ يرجى تحديد قيمة المهر بشكل صحيح!\nمثال: `زواج 1000`';
     }
 
     if (sender.money < dowry) {
@@ -786,7 +918,6 @@ function marry(senderId, targetId, customDowry) {
 
 function divorce(userId) {
     const user = getUser(userId);
-
     if (!user.marriage) return '❌ أنت لست متزوجاً أصلاً لتطلق!';
 
     const spouseId = user.marriage.spouseId;
@@ -800,13 +931,11 @@ function divorce(userId) {
     }
 
     saveDB();
-
     return `💔 *تم الطلاق رسمياً.*\n💰 تم تحويل مبلغ ${formatMoney(dowry)} للمطلقة كتعويض/مؤخر. نرجو لكم التوفيق!`;
 }
 
 function khul(userId) {
     const user = getUser(userId);
-
     if (!user.marriage) return '❌ أنت لست متزوجاً لرفع دعوى خلع!';
 
     const spouseId = user.marriage.spouseId;
@@ -825,13 +954,11 @@ function khul(userId) {
 
     user.marriage = null;
     saveDB();
-
     return `⚖️ *تم الخلع بنجاح.*\n💸 تم رد المهر وقدره ${formatMoney(dowry)} للزوج وإلغاء عقد الزواج.`;
 }
 
 function getStatus(userId) {
     const user = getUser(userId);
-
     if (user.marriage) {
         const partnerTitle = user.marriage.role === 'husband' ? 'الزوجة' : 'الزوج';
         return `❤️ *الحالة الاجتماعية:* متزوج/ة\n👤 **${partnerTitle}:** ${user.marriage.spouseName}\n📅 **تاريخ الزواج:** ${user.marriage.date}`;
@@ -843,19 +970,16 @@ function getStatus(userId) {
 function addMoney(targetId, amount) {
     const target = getUser(targetId);
     const addAmt = parseInt(amount);
-
     if (isNaN(addAmt) || addAmt <= 0) return '❌ يرجى كتابة مبلغ شحن صحيح!';
 
     target.money += addAmt;
     saveDB();
-
     return `✅ **تم شحن الرصيد بنجاح!**\n👤 **المستفيد:** ${target.name}\n➕ **المبلغ المضاف:** ${formatMoney(addAmt)}\n💰 **الرصيد الجديد:** ${formatMoney(target.money)}`;
 }
 
 function subtractMoney(targetId, amount) {
     const target = getUser(targetId);
     const subAmt = parseInt(amount);
-
     if (isNaN(subAmt) || subAmt <= 0) return '❌ يرجى كتابة مبلغ سحب صحيح!';
 
     if (target.money < subAmt) {
@@ -863,42 +987,48 @@ function subtractMoney(targetId, amount) {
     } else {
         target.money -= subAmt;
     }
-
     saveDB();
-
     return `🔻 **تم سحب الرصيد بنجاح!**\n👤 **المستهدف:** ${target.name}\n➖ **المبلغ المسحوب:** ${formatMoney(subAmt)}\n💰 **الرصيد المتبقي:** ${formatMoney(target.money)}`;
 }
 
-// دالة قائمة الأوامر الشاملة (الأوامر)
+// دالة قائمة الأوامر الشاملة المحدثة بجميع الألعاب والميزات الجديدة
 function getHelpMenu() {
-    return `📜 *قائمة أوامر وعلاوات البوت الشاملة* 🤖
+    return `📜 *قائمة أوامر وعلاوات البوت الشاملة (AN GPT)* 🤖
 ━━━━━━━━━━━━━━━
 
 🏦 *أوامر البنك والحسابات:*
 🔹 \`فتح حساب\` ⟵ لإنشاء حساب بنكي جديد برقم فريد ورصيد ابتدائي.
-🔹 \`رصيدي\` أو \`بنكي\` ⟵ لعرض تفاصيل حسابك ورصيدك وقروضك.
-🔹 \`تحويل [المبلغ]\` أو \`.تحويل [المبلغ]\` (مع منشن/رد) ⟵ لتحويل أموال لشخص آخر (يمنع التحويل في حال وجود قرض غير مسدد).
-🔹 \`قرض [المبلغ]\` ⟵ لاقتراض أموال بنسبة 110% (يجب السداد خلال 48 ساعة، وإلا سيتم سحب المبلغ تلقائياً من رصيدك في الخلفية).
-🔹 \`سداد القرض\` ⟵ لسداد القرض المستحق عليك وإلغاء القيود.
+🔹 \`رصيدي\` أو \`بنكي\` ⟵ لعرض تفاصيل حسابك ورصيدك ووظيفتك وقروضك وحالة الدرع.
+🔹 \`تحويل [المبلغ]\` (مع منشن/رد) ⟵ لتحويل أموال لشخص آخر.
+🔹 \`قرض [المبلغ]\` ⟵ لاقتراض أموال بنسبة 110% (يجب السداد خلال 48 ساعة).
+🔹 \`سداد القرض\` ⟵ لسداد القرض المستحق عليك.
 🔹 \`التوب\` ⟵ لعرض قائمة أغنى 10 أثرياء في البوت.
+
+🛡️ *أوامر الحماية والدفاع:*
+🔹 \`درع حماية\` أو \`شراء درع\` ⟵ لشراء درع حماية يمنع أي شخص من سرقتك تماماً لمدة 24 ساعة (السعر: 5,000 ريال).
+
+📊 *أوامر البورصة والاستثمار:*
+🔹 \`البورصة\` ⟵ لعرض سعر سهم البورصة الحية واتجاه السوق (تتغير كل 5 دقائق).
+🔹 \`استثمار [المبلغ]\` ⟵ استثمار أموالك في البورصة الحية (بين ربح وخسارة).
 
 🎮 *أوامر الألعاب التنافسية:*
 🔹 \`دمج\` ⟵ لعبة دمج الحروف المبعثرة.
 🔹 \`فكك\` ⟵ لعبة تفكيك الجمل والكلمات.
 🔹 \`سرعة\` ⟵ لعبة كتابة النصوص بسرعة للربح.
 🔹 \`عواصم\` ⟵ لعبة الإجابة على عواصم الدول.
-🔹 \`حظ [المبلغ]\` ⟵ لعبة الحظ السريع (ربح أو خسارة).
-🔹 \`استثمار [المبلغ]\` ⟵ استثمار أموالك بنسبة ربح/خسارة عشوائية.
+🔹 \`حظ [المبلغ]\` ⟵ لعبة الحظ السريع (ربح أو خسارة عشوائية).
 
 🥷 *أوامر السرقة والسجن والمحامي:*
-🔹 \`سرقة\` (مع منشن/رد) ⟵ لمحاولة سرقة أموال شخص آخر (احذر من الفشل والسجن لمدة ساعتين!).
-🔹 \`محامي\` أو \`دفع الغرامة\` (مع منشن/رد) ⟵ لدفع غرامة شخص مسجون وإخراجه فوراً من السجن.
+🔹 \`سرقة\` (مع منشن/رد) ⟵ لمحاولة سرقة أموال شخص آخر (احذر من السجن لساعتين!).
+🔹 \`محامي\` أو \`دفع الغرامة\` (مع منشن/رد) ⟵ لدفع غرامة شخص مسجون وإخراجه فوراً.
 
-🏢 *أوامر الشركات والأعمال:*
+🏢 *أوامر الشركات والموظفين:*
 🔹 \`انشاء شركة [الاسم]\` ⟵ لتأسيس شركتك الخاصة (التكلفة 10,000 ريال).
+🔹 \`قائمة الشركات\` ⟵ لعرض الشركات المتاحة وأرصدتها وموظفيها.
 🔹 \`استثمار شركة [الاسم] [المبلغ]\` ⟵ ضخ استثمار في خزينة الشركة.
-🔹 \`قائمة الشركات\` ⟵ لعرض الشركات المتاحة وأرصدتها.
-*(ملاحظة: خزائن الشركات تتأثر بأرباح وخسائر عشوائية دورية لتوليد الحماس!)*
+🔹 \`تعيين [منشن] [اسم الشركة]\` ⟵ لتعيين عضو بالقروب موظفاً في شركتك.
+🔹 \`طرد [منشن] [اسم الشركة]\` ⟵ لفصل موظف من شركتك.
+🔹 \`عمل\` ⟵ أداء العمل اليومي كموظف (يزيد أرباح الشركة ويمنحك راتبك الثابته).
 
 💍 *أوامر الزواج والعلاقات:*
 🔹 \`زواج [المهر]\` (مع منشن/رد) ⟵ لطلب الزواج ودفع المهر.
@@ -959,7 +1089,7 @@ async function startBot() {
         }
     });
 
-    // --- (7.1) ترحيب الأعضاء الجدد (مع الصورة والمنشن) ---
+    // --- (7.1) ترحيب الأعضاء الجدد ---
     sock.ev.on('group-participants.update', async (anu) => {
         try {
             const { id, participants, action } = anu;
@@ -1007,22 +1137,20 @@ async function startBot() {
         if (!text) return;
 
         const jid = msg.key.remoteJid;
-
         const user = getUser(cleanSenderId, null, pushName);
 
-        // --- نظام السجن: منع المستخدم المسجون من اللعب أو تنفيذ الأوامر لمدة السجن (ساعتين) ---
+        // --- نظام السجن ---
         if (user.jailUntil && user.jailUntil > Date.now()) {
             if (text !== 'بنكي' && text !== 'رصيدي' && text !== 'حسابي' && !text.startsWith('محامي') && !text.startsWith('دفع الغرامة')) {
                 let remainingMins = Math.ceil((user.jailUntil - Date.now()) / (60 * 1000));
-                await sock.sendMessage(jid, { text: `🚨 *أنت مسجون خلف القضبان!* 🚔\n⏳ باقي على خروجك: ${remainingMins} دقيقة ولا يمكنك اللعب بالبوت حالياً.\n💡 يمكن لأحد أصدقائك أو محامٍ دفع غرامتك عبر أمر \`محامي\` أو \`دفع الغرامة\` (بالمنشن أو الرد).` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `🚨 *أنت مسجون خلف القضبان!* 🚔\n⏳ باقي على خروجك: ${remainingMins} دقيقة ولا يمكنك اللعب بالبوت حالياً.\n💡 يمكن لأحد أصدقائك دفع غرامتك عبر أمر \`محامي\` (بالمنشن).` }, { quoted: msg });
                 return;
             }
         }
 
-        // --- (A) التحقق من الإجابة على أي لعبة نشطة في الشات ---
+        // --- (A) التحقق من الإجابة على أي لعبة نشطة ---
         if (activeGames[jid] && activeGames[jid].length > 0) {
             const userAnswer = text.trim().toLowerCase();
-            
             const matchedIndex = activeGames[jid].findIndex(g => g.answer.trim().toLowerCase() === userAnswer);
 
             if (matchedIndex !== -1) {
@@ -1096,6 +1224,17 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
+        else if (text === 'البورصة' || text === 'بورصة') {
+            const res = getStockMarketInfo();
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        // --- شراء درع الحماية ---
+        else if (text === 'درع حماية' || text === 'شراء درع' || text === 'درع') {
+            const res = buyShield(cleanSenderId);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
         else if (text.startsWith('حظ ')) {
             const amount = parseInt(text.split(' ')[1]);
             const res = playLuck(cleanSenderId, amount);
@@ -1125,7 +1264,7 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
-        // --- ميزة المحامي / دفع الغرامة لإخراج المسجون ---
+        // --- ميزة المحامي / دفع الغرامة ---
         else if (text.startsWith('محامي') || text.startsWith('دفع الغرامة')) {
             const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
             const mentionedJid = contextInfo?.mentionedJid?.[0];
@@ -1133,7 +1272,7 @@ async function startBot() {
             const targetJid = mentionedJid || quotedParticipant;
 
             if (!targetJid) {
-                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على رسالة الشخص المسجون لدفع غرامته وإخراجه!\nمثال: `محامي` (مع منشن)' }, { quoted: msg });
+                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على رسالة الشخص المسجون لدفع غرامته!\nمثال: `محامي` (مع منشن)' }, { quoted: msg });
                 return;
             }
 
@@ -1142,7 +1281,7 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
-        // --- ميزة التحويل (تحويل أو .تحويل) ---
+        // --- ميزة التحويل ---
         else if (text.startsWith('تحويل') || text.startsWith('.تحويل')) {
             const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
             const mentionedJid = contextInfo?.mentionedJid?.[0];
@@ -1178,7 +1317,7 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
-        // --- نظام الشركات والمشاريع ---
+        // --- نظام الشركات والموظفين ---
         else if (text.startsWith('انشاء شركة ')) {
             const compName = text.replace('انشاء شركة', '').trim();
             const res = createCompany(cleanSenderId, compName);
@@ -1198,8 +1337,45 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
-        else if (text === 'أرباح الشركات' || text === 'سوق الشركات') {
-            const res = processCompaniesRandomProfits() || '🏢 لا توجد شركات مسجلة أو أرصدة حالياً في الخزائن لتوليد أرباح أو خسائر.';
+        // تعيين موظف
+        else if (text.startsWith('تعيين')) {
+            const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+            const mentionedJid = contextInfo?.mentionedJid?.[0];
+            const quotedParticipant = contextInfo?.participant;
+            const targetJid = mentionedJid || quotedParticipant;
+
+            if (!targetJid) {
+                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على العضو المراد تعيينه مع كتابة اسم الشركة!\nمثال: `تعيين [منشن] [اسم الشركة]`' }, { quoted: msg });
+                return;
+            }
+
+            const compName = text.replace('تعيين', '').replace('@' + targetJid.split('@')[0], '').trim();
+            const targetId = targetJid.split('@')[0].split(':')[0];
+            const res = employMember(cleanSenderId, targetId, compName);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        // طرد موظف
+        else if (text.startsWith('طرد')) {
+            const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+            const mentionedJid = contextInfo?.mentionedJid?.[0];
+            const quotedParticipant = contextInfo?.participant;
+            const targetJid = mentionedJid || quotedParticipant;
+
+            if (!targetJid) {
+                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على الموظف المراد طرده مع اسم الشركة!\nمثال: `طرد [منشن] [اسم الشركة]`' }, { quoted: msg });
+                return;
+            }
+
+            const compName = text.replace('طرد', '').replace('@' + targetJid.split('@')[0], '').trim();
+            const targetId = targetJid.split('@')[0].split(':')[0];
+            const res = fireMember(cleanSenderId, targetId, compName);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        // عمل الموظف
+        else if (text === 'عمل' || text.startsWith('عمل ')) {
+            const res = workForCompany(cleanSenderId);
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
@@ -1232,7 +1408,7 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
-        // --- أمر الشحن والسحب الخاص بك حصرياً ---
+        // --- أمر الشحن والسحب الإداري ---
         else if (text.startsWith('شحن') || text.startsWith('سحب')) {
             const ADMIN_NUMBER = "967774851129"; 
 
