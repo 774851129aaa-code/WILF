@@ -1409,7 +1409,7 @@ async function startBot() {
         else if (text.startsWith('شحن') || text.startsWith('سحب')) {
             const ADMIN_NUMBER = "967774851129"; 
 
-            if (cleanSenderId !== ADMIN_NUMBER) {
+            if (!cleanSenderId.includes(ADMIN_NUMBER)) {
                 await sock.sendMessage(jid, { text: '🚫 هذا الأمر مخصص لمالك البوت فقط!' }, { quoted: msg });
                 return;
             }
