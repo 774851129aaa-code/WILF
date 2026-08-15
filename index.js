@@ -383,14 +383,56 @@ const GAMES_BANK = {
 
 // --- (3) الوظائف المساعدة العامة ---
 
-function checkUserLoan(u) {
+function checkUserLoan(userId, u) {
     if (u && u.loan && Date.now() > u.loan.dueTime) {
-        if (u.money >= u.loan.amount) {
-            u.money -= u.loan.amount;
+        let loanAmt = u.loan.amount;
+        if (u.money >= loanAmt) {
+            u.money -= loanAmt;
+            u.loan = null;
         } else {
+            // المستخدم أفلس بالبنك وليس لديه رصيد كافي لسداد القرض
+            let remainingLoan = loanAmt - u.money;
             u.money = 0;
+
+            // البحث عن شركة يملكها المستخدم
+            let userCompName = null;
+            for (let cName in globalData.companies) {
+                if (globalData.companies[cName].ownerId === String(userId)) {
+                    userCompName = cName;
+                    break;
+                }
+            }
+
+            if (userCompName) {
+                let comp = globalData.companies[userCompName];
+                // هل خزينة الشركة تكفي لسداد باقي القرض؟
+                if (comp.treasury >= remainingLoan) {
+                    comp.treasury -= remainingLoan;
+                    u.loan = null;
+                } else {
+                    // الشركة ليس لديها مبلغ القرض الكافي -> تصفير الشركة وإرجاع حقوق المستثمرين
+                    if (comp.investors) {
+                        for (let invId in comp.investors) {
+                            let invAmount = comp.investors[invId];
+                            if (globalData.bank[invId]) {
+                                globalData.bank[invId].money += invAmount;
+                            }
+                        }
+                    }
+                    if (comp.employees) {
+                        comp.employees.forEach(empId => {
+                            if (globalData.bank[empId] && globalData.bank[empId].job === userCompName) {
+                                globalData.bank[empId].job = null;
+                            }
+                        });
+                    }
+                    delete globalData.companies[userCompName];
+                    u.loan = null;
+                }
+            } else {
+                u.loan = null;
+            }
         }
-        u.loan = null;
         saveDB();
     }
 }
@@ -427,7 +469,7 @@ function getUser(userId, username, firstName) {
     if (firstName) globalData.bank[uKey].name = firstName;
 
     const userObj = globalData.bank[uKey];
-    checkUserLoan(userObj);
+    checkUserLoan(uKey, userObj);
 
     return userObj;
 }
@@ -512,7 +554,7 @@ function takeLoan(userId, amount) {
     };
 
     saveDB();
-    return `🏦 *تم الموافقة على طلب القرض!* ✅\n💰 **المبلغ المضاف لرصيدك:** ${formatMoney(loanAmt)}\n📈 **المبلغ الواجب سداده (بنسبة 110%):** ${formatMoney(u.loan.amount)}\n⏳ **مدة السداد:** 48 ساعة\n⚠️ *تنبيه:* إذا لم تقم بالسداد خلال 48 ساعة، سيتم سحب المبلغ تلقائياً من رصيدك.`;
+    return `🏦 *تم الموافقة على طلب القرض!* ✅\n💰 **المبلغ المضاف لرصيدك:** ${formatMoney(loanAmt)}\n📈 **المبلغ الواجب سداده (بنسبة 110%):** ${formatMoney(u.loan.amount)}\n⏳ **مدة السداد:** 48 ساعة\n⚠️ *تنبيه:* إذا لم تقم بالسداد خلال 48 ساعة، سيتم سحب المبلغ من رصيدك أو من شركتك تلقائياً.`;
 }
 
 function payLoan(userId) {
@@ -606,7 +648,7 @@ function payBail(payerId, targetId) {
     return `⚖️ *تم توكيل المحامي ودفع الغرامة بنجاح!* 🏛️\n🤝 قام ${payer.name} بدفع غرامة وقدرها ${formatMoney(bailAmount)} وتم الإفراج عن ${target.name} من السجن! 🎉`;
 }
 
-// --- نظام الشركات والموظفين والاستثمار وأرباح الأصدقاء ---
+// --- نظام الشركات والموظفين والاستثمار وإدارة بيع الشركة ---
 function createCompany(userId, compName) {
     if (!compName) return '❌ يرجى كتابة اسم الشركة!\nمثال: `انشاء شركة [الاسم]`';
     if (globalData.companies[compName]) return '❌ هذه الشركة مسجلة مسبقاً، اختر اسمًا آخر!';
@@ -627,6 +669,48 @@ function createCompany(userId, compName) {
     saveDB();
 
     return `🏢 *مبروك! تم تأسيس شركتك بنجاح* 🎉\n📛 **اسم الشركة:** ${compName}\n👤 **المالك:** ${u.name}\n💰 **تكلفة التأسيس:** ${formatMoney(cost)}`;
+}
+
+// ميزة بيع الشركة مع إرجاع أموال المستثمرين بالكامل
+function sellCompany(userId, compName) {
+    if (!compName) return '❌ يرجى كتابة اسم الشركة المراد بيعها!\nمثال: `بيع شركة [الاسم]`';
+    if (!globalData.companies[compName]) return '❌ هذه الشركة غير موجودة!';
+
+    let comp = globalData.companies[compName];
+    if (comp.ownerId !== String(userId)) {
+        return '❌ لست مالك هذه الشركة لكي تستطيع بيعها!';
+    }
+
+    let totalRefunded = 0;
+    if (comp.investors) {
+        for (let invId in comp.investors) {
+            let invAmount = comp.investors[invId];
+            if (globalData.bank[invId]) {
+                globalData.bank[invId].money += invAmount;
+                totalRefunded += invAmount;
+            }
+        }
+    }
+
+    const u = getUser(userId);
+    let ownerBonus = comp.treasury;
+    if (ownerBonus > 0) {
+        u.money += ownerBonus;
+    }
+
+    // إزالة وظائف الموظفين التابعين للشركة المتباعة
+    if (comp.employees) {
+        comp.employees.forEach(empId => {
+            if (globalData.bank[empId] && globalData.bank[empId].job === compName) {
+                globalData.bank[empId].job = null;
+            }
+        });
+    }
+
+    delete globalData.companies[compName];
+    saveDB();
+
+    return `✅ *تم بيع وتصفية الشركة بنجاح!* 🏢\n📛 **اسم الشركة:** ${compName}\n🤝 **تم إرجاع أموال جميع المستثمرين:** ${formatMoney(totalRefunded)}\n💰 **رصيدك الحالي بعد البيع والتصفية:** ${formatMoney(u.money)}`;
 }
 
 function investCompany(userId, compName, amount) {
@@ -651,7 +735,7 @@ function investCompany(userId, compName, amount) {
     return `📈 *تم ضخ استثمار بنجاح في شركة (${compName})* 💼\n👤 **المستثمر:** ${u.name}\n➕ **المبلغ المودع:** ${formatMoney(invAmt)}\n💰 **خزينة الشركة الإجمالية:** ${formatMoney(comp.treasury)}\n💡 *ملاحظة:* يمكنك الآن سحب أرباح استثمارك في أي وقت عبر أمر \`سحب أرباح ${compName}\`.`;
 }
 
-// دالة جديدة لسحب أرباح الاستثمار للمستثمرين في شركات الأصدقاء
+// دالة سحب أرباح الاستثمار للمستثمرين في شركات الأصدقاء
 function claimInvestmentProfit(userId, compName) {
     if (!globalData.companies[compName]) return '❌ هذه الشركة غير موجودة!';
     const comp = globalData.companies[compName];
@@ -661,7 +745,6 @@ function claimInvestmentProfit(userId, compName) {
     }
 
     let investedAmount = comp.investors[String(userId)];
-    // حساب ربح عشوائي يعتمد على نسبة من استثماره (مثلاً من 10% إلى 35% عائد)
     let profitPercent = Math.floor(Math.random() * 26) + 10;
     let profitAmount = Math.floor(investedAmount * (profitPercent / 100));
 
@@ -732,7 +815,6 @@ function fireMember(ownerId, targetId, compName) {
     return `🛑 *تم فصل الموظف* ${target.name} من شركة ${compName} بنجاح.`;
 }
 
-// دالة العمل المحدثة مع الترحيب التفاعلي بحسب خزينة الشركة
 function workForCompany(userId) {
     const u = getUser(userId);
     if (!u.job) return '❌ أنت لست موظفاً في أي شركة حالياً!';
@@ -767,11 +849,11 @@ function workForCompany(userId) {
     let treasuryWelcome = "";
     let treasury = comp.treasury;
     if (treasury > 50000) {
-        treasuryWelcome = `🌟 أهلاً بك يا بطل! شركتنا غنية جداً وخزنتها تزخر بـ ${formatMoney(treasury)}، استمر في التألق!`;
+        treasuryWelcome = `🌟 أهلاً بك يا بطل! شركتنا غنية جداً وخزنتها تزخر بـ ${formatMoney(treasury)}, استمر في التألق!`;
     } else if (treasury > 15000) {
         treasuryWelcome = `👍 أهلاً بك في الشركة. وضع الخزينة مستقر وتضم ${formatMoney(treasury)}.`;
     } else {
-        treasuryWelcome = `⚠️ تنبيه: خزينة الشركة تعاني قليلاً ولا يوجد فيها سوى ${formatMoney(treasury)}، شد حيلك لترفع أرباحنا!`;
+        treasuryWelcome = `⚠️ تنبيه: خزينة الشركة تعاني قليلاً ولا يوجد فيها سوى ${formatMoney(treasury)}, شد حيلك لترفع أرباحنا!`;
     }
 
     return `💼 *أديت عملك بنجاح في شركة ${compName}!* 👏\n\n${treasuryWelcome}\n\n💰 **راتبك المستلم:** +${formatMoney(salary)}\n📈 **أرباح أُضيفت للخزينة:** +${formatMoney(companyProfit)}\n💳 رصيدك الحالي: ${formatMoney(u.money)}`;
@@ -1069,7 +1151,6 @@ function subtractMoney(targetId, amount) {
     return `🔻 **تم سحب الرصيد بنجاح!**\n👤 **المستهدف:** ${target.name}\n➖ **المبلغ المسحوب:** ${formatMoney(subAmt)}\n💰 **الرصيد المتبقي:** ${formatMoney(target.money)}`;
 }
 
-// دالة قائمة الأوامر الشاملة المحدثة
 function getHelpMenu() {
     return `📜 *قائمة أوامر وعلاوات البوت الشاملة (AN GPT)* 🤖
 ━━━━━━━━━━━━━━━
@@ -1102,6 +1183,7 @@ function getHelpMenu() {
 
 🏢 *أوامر الشركات والموظفين والاستثمار:*
 🔹 \`انشاء شركة [الاسم]\` ⟵ لتأسيس شركتك الخاصة (التكلفة 10,000 ريال).
+🔹 \`بيع شركة [الاسم]\` ⟵ لبيع وتصفية شركتك وإرجاع أموال المستثمرين بالكامل.
 🔹 \`قائمة الشركات\` ⟵ لعرض الشركات المتاحة وأرصدتها وموظفيها والمستثمرين.
 🔹 \`استثمار شركة [الاسم] [المبلغ]\` ⟵ الاستثمار في شركة صديقك وزيادة خزينتها.
 🔹 \`سحب أرباح [اسم الشركة]\` ⟵ سحب أرباح استثمارك من شركة صديقك وجني العوائد!
@@ -1397,6 +1479,12 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
+        else if (text.startsWith('بيع شركة ')) {
+            const compName = text.replace('بيع شركة', '').trim();
+            const res = sellCompany(cleanSenderId, compName);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
         else if (text.startsWith('استثمار شركة ')) {
             const parts = text.replace('استثمار شركة', '').trim().split(' ');
             const compName = parts[0];
@@ -1528,7 +1616,7 @@ async function startBot() {
                 res = subtractMoney(targetId, amount);
             }
 
-            await sock.sendMessage(jid, { res }, { quoted: msg });
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
         else if (text === 'طلاق') {
