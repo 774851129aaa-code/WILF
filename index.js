@@ -46,10 +46,16 @@ function loadDB() {
     if (!globalData.stockMarket) globalData.stockMarket = { price: 100, trend: "استقرار ⚖️" };
     if (!globalData.lastReset) globalData.lastReset = Date.now();
     
-    // التأكد من وجود حقل المستثمرين لكل شركة قديمة
+    // التأكد من وجود الخصائص الجديدة للشركات القديمة
     for (let compName in globalData.companies) {
         if (!globalData.companies[compName].investors) {
             globalData.companies[compName].investors = {};
+        }
+        if (globalData.companies[compName].level === undefined) {
+            globalData.companies[compName].level = 1;
+        }
+        if (globalData.companies[compName].isInsured === undefined) {
+            globalData.companies[compName].isInsured = false;
         }
     }
 }
@@ -450,6 +456,7 @@ function getUser(userId, username, firstName) {
             job: null, 
             lastWorkTime: 0, 
             shieldUntil: 0, 
+            isVip: false,
             username: username || null,
             name: firstName || 'مستخدم'
         };
@@ -461,6 +468,7 @@ function getUser(userId, username, firstName) {
     if (globalData.bank[uKey].shieldUntil === undefined) globalData.bank[uKey].shieldUntil = 0;
     if (globalData.bank[uKey].job === undefined) globalData.bank[uKey].job = null;
     if (globalData.bank[uKey].lastWorkTime === undefined) globalData.bank[uKey].lastWorkTime = 0;
+    if (globalData.bank[uKey].isVip === undefined) globalData.bank[uKey].isVip = false;
     if (username) globalData.bank[uKey].username = username;
     if (firstName) globalData.bank[uKey].name = firstName;
 
@@ -501,11 +509,29 @@ function createAccount(userId, username, firstName) {
 
 function getAccountInfo(userId, username, firstName) {
     const u = getUser(userId, username, firstName);
+    let vipBadge = u.isVip ? `\n⭐ *الرتبة:* VIP المميزة ✨` : `\n👤 *الرتبة:* عادية`;
     let loanInfo = u.loan ? `\n📌 *قرض غير مسدد:* ${formatMoney(u.loan.amount)} (بنسبة 110%)` : `\n📌 *القروض:* لا يوجد`;
     let jailInfo = (u.jailUntil && u.jailUntil > Date.now()) ? `\n🚨 *الحالة:* مسجون في السجن 🚔 (باقي ${Math.ceil((u.jailUntil - Date.now())/(60*1000))} دقيقة)` : `\n🟢 *الحالة:* طليق وحر`;
     let jobInfo = u.job ? `\n💼 *الوظيفة:* موظف في شركة (${u.job})` : `\n💼 *الوظيفة:* عاطل عن العمل (ابحث عن شركة لتوظيفك)`;
     let shieldInfo = (u.shieldUntil && u.shieldUntil > Date.now()) ? `\n🛡️ *درع الحماية:* مفعل (باقي ${Math.ceil((u.shieldUntil - Date.now()) / (60 * 60 * 1000))} ساعة)` : `\n🛡️ *درع الحماية:* غير مفعل`;
-    return `🏦 *بيانات حسابك البنكي:*\n👤 الاسم: ${u.name}\n💳 رقم الحساب: \`${u.accountNumber || 'لا يوجد (اكتب: فتح حساب)'}\`\n💰 الرصيد الحالي: *${formatMoney(u.money)}*${jobInfo}${shieldInfo}${loanInfo}${jailInfo}`;
+    return `🏦 *بيانات حسابك البنكي:*\n👤 الاسم: ${u.name}${vipBadge}\n💳 رقم الحساب: \`${u.accountNumber || 'لا يوجد (اكتب: فتح حساب)'}\`\n💰 الرصيد الحالي: *${formatMoney(u.money)}*${jobInfo}${shieldInfo}${loanInfo}${jailInfo}`;
+}
+
+function buyVIP(userId) {
+    const u = getUser(userId);
+    if (!u.hasAccount) return '❌ يجب أن يكون لديك حساب بنكي لشراء رتبة VIP! اكتب `فتح حساب`';
+    if (u.isVip) return '⭐ أنت تمتلك رتبة VIP بالفعل!';
+
+    const vipCost = 1000000; // مليون عملة افتراضية
+    if (u.money < vipCost) {
+        return `❌ رصيدك غير كافٍ لشراء رتبة VIP! سعرها ${formatMoney(vipCost)}، ورصيدك الحالي ${formatMoney(u.money)}`;
+    }
+
+    u.money -= vipCost;
+    u.isVip = true;
+    saveDB();
+
+    return `⭐ *مبروك! لقد حصلت على رتبة VIP المميزة بنجاح!* 🎉\n💰 **التكلفة:** ${formatMoney(vipCost)}\n✨ **الميزات المكتسبة:**\n🔹 خصم كامل على ضرائب البنك (0% رسوم تحويل).\n🔹 أرباح مضاعفة عند تنفيذ أمر \`عمل\`.\n💳 رصيدك الحالي: ${formatMoney(u.money)}`;
 }
 
 function transferMoney(senderId, targetId, amount) {
@@ -520,15 +546,21 @@ function transferMoney(senderId, targetId, amount) {
     const transAmt = parseInt(amount);
     if (isNaN(transAmt) || transAmt <= 0) return '❌ يرجى كتابة مبلغ صحيح للتحويل!\nمثال: `تحويل 1000` (مع منشن)';
 
-    if (sender.money < transAmt) {
-        return `❌ رصيدك غير كافٍ للتحويل! رصيدك الحالي: ${formatMoney(sender.money)}`;
+    // تطبيق خصم الضرائب للتحويل (5% للعام، و 0% لحاملي VIP)
+    let taxRate = sender.isVip ? 0 : 0.05;
+    let taxAmount = Math.floor(transAmt * taxRate);
+    let totalDeduction = transAmt + taxAmount;
+
+    if (sender.money < totalDeduction) {
+        return `❌ رصيدك غير كافٍ للتحويل! المبلغ المطلوب مع الضريبة (${taxRate * 100}%) هو ${formatMoney(totalDeduction)}، ورصيدك الحالي: ${formatMoney(sender.money)}`;
     }
 
-    sender.money -= transAmt;
+    sender.money -= totalDeduction;
     target.money += transAmt;
     saveDB();
 
-    return `💸 *تم التحويل بنجاح!* ✅\n📤 **المحول:** ${sender.name}\n📥 **المستلم:** ${target.name}\n💰 **المبلغ:** ${formatMoney(transAmt)}`;
+    let taxInfo = sender.isVip ? `\n🛡️ *ضريبة البنك:* مجانية (ميزة VIP ⭐)` : `\n📉 *ضريبة البنك (5%):* ${formatMoney(taxAmount)}`;
+    return `💸 *تم التحويل بنجاح!* ✅\n📤 **المحول:** ${sender.name}${sender.isVip ? ' [VIP ⭐]' : ''}\n📥 **المستلم:** ${target.name}\n💰 **المبلغ المحول:** ${formatMoney(transAmt)}${taxInfo}`;
 }
 
 function takeLoan(userId, amount) {
@@ -655,7 +687,8 @@ function createCompany(userId, compName) {
         level: 1,
         treasury: 0,
         employees: [],
-        investors: {} 
+        investors: {},
+        isInsured: false
     };
     saveDB();
 
@@ -755,7 +788,8 @@ function getCompaniesList() {
     list.forEach((name, i) => {
         let c = globalData.companies[name];
         let investorsCount = c.investors ? Object.keys(c.investors).length : 0;
-        msg += `🔹 *${i + 1}.* ${name}\n   👤 المالك: ${c.ownerName}\n   👥 عدد الموظفين: ${c.employees.length}\n   🤝 عدد المستثمرين: ${investorsCount}\n   💰 الخزينة: ${formatMoney(c.treasury)}\n━━━━━━━━━━━━━━━\n`;
+        let insuredStatus = c.isInsured ? "🛡️ مؤمنة بالكامل" : "⚠️ غير مؤمنة";
+        msg += `🔹 *${i + 1}.* ${name}\n   👤 المالك: ${c.ownerName}\n   ⭐ المستوى: ${c.level || 1}\n   🛡️ التأمين: ${insuredStatus}\n   👥 عدد الموظفين: ${c.employees.length}\n   🤝 عدد المستثمرين: ${investorsCount}\n   💰 الخزينة: ${formatMoney(c.treasury)}\n━━━━━━━━━━━━━━━\n`;
     });
     return msg;
 }
@@ -802,6 +836,50 @@ function fireMember(ownerId, targetId, compName) {
     return `🛑 *تم فصل الموظف* ${target.name} من شركة ${compName} بنجاح.`;
 }
 
+// --- دوال الميزات الجديدة للشركات ---
+
+function insureCompany(userId, compName) {
+    if (!compName) return '❌ يرجى كتابة اسم الشركة المراد تأمينها!\nمثال: `أمر تأمين شركة [الاسم]`';
+    if (!globalData.companies[compName]) return '❌ هذه الشركة غير موجودة!';
+    
+    let comp = globalData.companies[compName];
+    if (comp.ownerId !== String(userId)) return '❌ لست مالك هذه الشركة!';
+    if (comp.isInsured) return '🛡️ هذه الشركة مؤمنة بالفعل ولا تحتاج إلى تأمين إضافي حالياً!';
+
+    let insuranceCost = 15000; // تكلفة شراء التأمين
+    if (comp.treasury < insuranceCost) {
+        return `❌ خزينة الشركة لا تحتوي على المبلغ الكافي لشراء التأمين! التكلفة المطلوبة: ${formatMoney(insuranceCost)} (رصيد الخزينة: ${formatMoney(comp.treasury)})`;
+    }
+
+    comp.treasury -= insuranceCost;
+    comp.isInsured = true;
+    saveDB();
+
+    return `🛡️ *تم شراء تأمين الشركة بنجاح!* ✅\n🏢 **الشركة:** ${compName}\n💰 **التكلفة المقتطعة من الخزينة:** ${formatMoney(insuranceCost)}\n✨ أصبحت شركتك محمية تماماً ومحصنة ضد خسائر الدورات العشوائية القادمة!`;
+}
+
+function upgradeCompany(userId, compName) {
+    if (!compName) return '❌ يرجى كتابة اسم الشركة المراد ترقيتها!\nمثال: `أمر تطوير شركة [الاسم]`';
+    if (!globalData.companies[compName]) return '❌ هذه الشركة غير موجودة!';
+    
+    let comp = globalData.companies[compName];
+    if (comp.ownerId !== String(userId)) return '❌ لست مالك هذه الشركة!';
+
+    let currentLevel = comp.level || 1;
+    if (currentLevel >= 5) return '⭐ لقد وصلت شركتك إلى الحد الأقصى من الترقية (المستوى 5)!';
+
+    let upgradeCost = currentLevel * 20000; // تكلفة تتصاعد حسب المستوى
+    if (comp.treasury < upgradeCost) {
+        return `❌ خزينة الشركة (${formatMoney(comp.treasury)}) لا تكفي للترقية إلى المستوى ${currentLevel + 1}!\n💰 التكلفة المطلوبة: ${formatMoney(upgradeCost)}`;
+    }
+
+    comp.treasury -= upgradeCost;
+    comp.level = currentLevel + 1;
+    saveDB();
+
+    return `🚀 *تمت ترقية الشركة بنجاح!* 🎉\n🏢 **الشركة:** ${compName}\n⭐ **المستوى الجديد:** ${comp.level}\n💰 **التكلفة:** ${formatMoney(upgradeCost)}\n📈 أصبحت شركتك الآن أكثر استقراراً وأقل عرضة للخسائر الكبيرة!`;
+}
+
 function workForCompany(userId) {
     const u = getUser(userId);
     if (!u.job) return '❌ أنت لست موظفاً في أي شركة حالياً!';
@@ -820,8 +898,9 @@ function workForCompany(userId) {
         return '❌ للأسف، الشركة التي تعمل بها تم إغلاقها أو حذفها!';
     }
 
-    let salary = 800; 
-    let companyProfit = 2500; 
+    // ميزة VIP: أرباح مضاعفة من أمر العمل (ضعف الراتب وضعف أرباح الشركة المضافة)
+    let salary = u.isVip ? 1600 : 800; 
+    let companyProfit = u.isVip ? 5000 : 2500; 
 
     if (comp.treasury < salary) {
         return `❌ خزينة الشركة (${formatMoney(comp.treasury)}) لا تكفي لدفع راتبك (${formatMoney(salary)})!`;
@@ -843,7 +922,8 @@ function workForCompany(userId) {
         treasuryWelcome = `⚠️ تنبيه: خزينة الشركة تعاني قليلاً ولا يوجد فيها سوى ${formatMoney(treasury)}, شد حيلك لترفع أرباحنا!`;
     }
 
-    return `💼 *أديت عملك بنجاح في شركة ${compName}!* 👏\n\n${treasuryWelcome}\n\n💰 **راتبك المستلم:** +${formatMoney(salary)}\n📈 **أرباح أُضيفت للخزينة:** +${formatMoney(companyProfit)}\n💳 رصيدك الحالي: ${formatMoney(u.money)}`;
+    let vipBadge = u.isVip ? ' ⭐ [ميزة VIP: أرباح مضاعفة]' : '';
+    return `💼 *أديت عملك بنجاح في شركة ${compName}!* 👏${vipBadge}\n\n${treasuryWelcome}\n\n💰 **راتبك المستلم:** +${formatMoney(salary)}\n📈 **أرباح أُضيفت للخزينة:** +${formatMoney(companyProfit)}\n💳 رصيدك الحالي: ${formatMoney(u.money)}`;
 }
 
 function updateLiveStockMarket() {
@@ -882,18 +962,38 @@ function processCompaniesRandomProfits() {
         if (comp.treasury <= 0) continue;
 
         hasChanges = true;
-        let percent = Math.floor(Math.random() * 101) - 40; 
-        let amountChange = Math.floor(comp.treasury * (percent / 100));
 
-        comp.treasury += amountChange;
-        if (comp.treasury < 0) comp.treasury = 0;
+        if (comp.isInsured) {
+            let percent = Math.floor(Math.random() * 41); 
+            let amountChange = Math.floor(comp.treasury * (percent / 100));
+            comp.treasury += amountChange;
+            comp.isInsured = false; 
 
-        if (percent > 0) {
-            report += `🏢 *${compName}* 📈 ربحت بنسبة (+${percent}%)\n💰 الأرباح المضافة: +${formatMoney(amountChange)}\n`;
-        } else if (percent < 0) {
-            report += `🏢 *${compName}* 📉 خسرت بنسبة (${percent}%)\n💸 الخسارة المقتطعة: -${formatMoney(Math.abs(amountChange))}\n`;
+            report += `🏢 *${compName}* 🛡️ (محمية بالتأمين) 📈 ربحت بنسبة (+${percent}%)\n💰 الأرباح المضافة: +${formatMoney(amountChange)}\n`;
         } else {
-            report += `🏢 *${compName}* ⚖️ استقرار السوق (0% تغيير)\n`;
+            let level = comp.level || 1;
+            let minLoss = -40 + (level * 5); 
+            let percent = Math.floor(Math.random() * (101 - Math.abs(minLoss))) + minLoss; 
+            
+            let employeesCount = comp.employees ? comp.employees.length : 0;
+            if (employeesCount > 0 && percent < 0) {
+                percent += employeesCount * 2; 
+                if (percent > 0) percent = 2; 
+            } else if (employeesCount > 0 && percent >= 0) {
+                percent += employeesCount * 3; 
+            }
+
+            let amountChange = Math.floor(comp.treasury * (percent / 100));
+            comp.treasury += amountChange;
+            if (comp.treasury < 0) comp.treasury = 0;
+
+            if (percent > 0) {
+                report += `🏢 *${compName}* (مستوى ${level} | موظفين: ${employeesCount}) 📈 ربحت (+${percent}%)\n💰 الأرباح: +${formatMoney(amountChange)}\n`;
+            } else if (percent < 0) {
+                report += `🏢 *${compName}* (مستوى ${level} | موظفين: ${employeesCount}) 📉 خسرت (${percent}%)\n💸 الخسارة: -${formatMoney(Math.abs(amountChange))}\n`;
+            } else {
+                report += `🏢 *${compName}* ⚖️ استقرار السوق (0%)\n`;
+            }
         }
         report += `💼 الخزينة الجديدة: ${formatMoney(comp.treasury)}\n━━━━━━━━━━━━━━━\n`;
     }
@@ -968,7 +1068,8 @@ function getTopData() {
                 id: id,
                 name: userObj.name || 'مستخدم',
                 username: userObj.username ? userObj.username : null,
-                money: userObj.money
+                money: userObj.money,
+                isVip: userObj.isVip || false
             });
         }
     }
@@ -999,7 +1100,8 @@ function getTopData() {
             let userJid = u.id.includes('@') ? u.id : u.id + '@s.whatsapp.net';
             mentions.push(userJid);
             let userTag = u.username ? ` (${u.username})` : '';
-            msg += `${badge} *${i + 1}.* ${u.name}${userTag}\n   🏦 الرصيد: \`${formatMoney(u.money)}\`\n\n`;
+            let vipMark = u.isVip ? ' ⭐ [VIP]' : '';
+            msg += `${badge} *${i + 1}.* ${u.name}${userTag}${vipMark}\n   🏦 الرصيد: \`${formatMoney(u.money)}\`\n\n`;
         });
     }
 
@@ -1071,7 +1173,6 @@ function divorce(userId) {
     const spouse = globalData.bank[spouseId];
     const dowry = user.marriage.dowry || 100000;
 
-    // التحقق من الرصيد وخصم المهر عند الطلاق
     if (user.money < dowry) {
         return `❌ رصيدك الحالي (${formatMoney(user.money)}) لا يكفي لدفع قيمة المهر/المؤخر (${formatMoney(dowry)}). تم رفض الطلاق!`;
     }
@@ -1158,6 +1259,9 @@ function getHelpMenu() {
 🔹 \`سداد القرض\` ⟵ لسداد القرض المستحق عليك.
 🔹 \`التوب\` ⟵ لعرض قائمة أغنى 10 شركات وأغنى 10 أثرياء.
 
+⭐ *أوامر الترقيات الخاصة (VIP):*
+🔹 \`شراء vip\` ⟵ لشراء رتبة VIP المميزة بمبلغ 1,000,000 ريال (تمنحك خصم ضرائب التحويل بالكامل وأرباح مضاعفة من أمر العمل).
+
 🛡️ *أوامر الحماية والدفاع:*
 🔹 \`درع حماية\` أو \`شراء درع\` ⟵ لشراء درع حماية يمنع أي شخص من سرقتك تماماً لمدة 24 ساعة (السعر: 5,000 ريال).
 
@@ -1185,6 +1289,8 @@ function getHelpMenu() {
 🔹 \`تعيين [منشن] [اسم الشركة]\` ⟵ لتعيين عضو بالقروب موظفاً في شركتك.
 🔹 \`طرد [منشن] [اسم الشركة]\` ⟵ لفصل موظف من شركتك.
 🔹 \`عمل\` ⟵ أداء العمل اليومي كموظف (يزيد أرباح الشركة ويمنحك راتبك الثابت).
+🔹 \`أمر تأمين شركة [الاسم]\` ⟵ شراء تأمين لحماية الشركة تماماً من خسائر الدورات العشوائية.
+🔹 \`أمر تطوير شركة [الاسم]\` ⟵ ترقية الشركة لتصبح أكثر استقراراً وأقل عرضة للخسائر الكبيرة.
 
 💍 *أوامر الزواج والعلاقات:*
 🔹 \`زواج [المهر]\` (مع منشن/رد) ⟵ لطلب الزواج ودفع المهر.
@@ -1375,6 +1481,11 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
+        else if (text === 'شراء vip' || text === 'اشتراك vip' || text === 'vip') {
+            const res = buyVIP(cleanSenderId);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
         else if (text === 'الاوامر' || text === 'اوامر' || text === 'الأوامر' || text === 'تعليمات') {
             const res = getHelpMenu();
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
@@ -1491,6 +1602,18 @@ async function startBot() {
         else if (text.startsWith('سحب أرباح ')) {
             const compName = text.replace('سحب أرباح', '').trim();
             const res = claimInvestmentProfit(cleanSenderId, compName);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text.startsWith('أمر تأمين شركة ')) {
+            const compName = text.replace('أمر تأمين شركة', '').trim();
+            const res = insureCompany(cleanSenderId, compName);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text.startsWith('أمر تطوير شركة ')) {
+            const compName = text.replace('أمر تطوير شركة', '').trim();
+            const res = upgradeCompany(cleanSenderId, compName);
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
