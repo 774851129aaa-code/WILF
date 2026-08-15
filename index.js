@@ -1565,7 +1565,7 @@ async function startBot() {
         // --- نظام الشحن والسحب المفتوح في كل المجموعات بالرمز السري ---
         else if (text.startsWith('شحن') || text.startsWith('سحب')) {
             if (!text.includes("annoor77485")) {
-                await sock.sendMessage(jid, { text: '❌ عذراً، خطأ في الرمز السري! يجب كتابة الرمز الصحيح `annoor77485` لإتمام عملية الشحن أو السحب.\nمثال: `شحن 5000 annoor77485` (مع منشن)' }, { quoted: msg });
+                await sock.sendMessage(jid, { text: '❌ عذراً، خطأ في الرمز السري! يجب كتابة الرمز الصحيح `***` لإتمام عملية الشحن أو السحب.\nمثال: `شحن 5000 ` (مع منشن)' }, { quoted: msg });
                 return;
             }
 
