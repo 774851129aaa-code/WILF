@@ -28,9 +28,9 @@ const fs = require('fs');
 
 // --- (1) تهيئة قاعدة البيانات والملفات والجلسات ---
 const DB_FILE = './bankDB.json';
-let globalData = { bank: {}, lastReset: Date.now() };
+let globalData = { bank: {}, companies: {}, lastReset: Date.now() };
 
-// لحفظ الألعاب الشغالة حالياً لكل شات (JID)
+// لحفظ الألعاب الشغالة حالياً لكل شات (تسمح بأكثر من لعبة في نفس الوقت)
 const activeGames = {};
 
 function loadDB() {
@@ -42,6 +42,7 @@ function loadDB() {
         console.error("خطأ في تحميل قاعدة البيانات:", e);
     }
     if (!globalData.bank) globalData.bank = {};
+    if (!globalData.companies) globalData.companies = {};
     if (!globalData.lastReset) globalData.lastReset = Date.now();
 }
 
@@ -383,6 +384,7 @@ function getUser(userId, username, firstName) {
             hasAccount: false,
             accountNumber: null,
             marriage: null,
+            loan: null,
             lastSalary: 0,
             lastBakhsh: 0,
             username: username || null,
@@ -390,6 +392,7 @@ function getUser(userId, username, firstName) {
         };
     }
 
+    if (!globalData.bank[uKey].loan) globalData.bank[uKey].loan = null;
     if (username) globalData.bank[uKey].username = username;
     if (firstName) globalData.bank[uKey].name = firstName;
 
@@ -427,8 +430,156 @@ function createAccount(userId, username, firstName) {
 
 function getAccountInfo(userId, username, firstName) {
     const u = getUser(userId, username, firstName);
-    return `🏦 *بيانات حسابك البنكي:*\n👤 الاسم: ${u.name}\n💳 رقم الحساب: \`${u.accountNumber || 'لا يوجد (اكتب: فتح حساب)'}\`\n💰 الرصيد الحالي: *${formatMoney(u.money)}*`;
+    let loanInfo = u.loan ? `\n📌 *قرض غير مسدد:* ${formatMoney(u.loan.amount)}` : `\n📌 *القروض:* لا يوجد`;
+    return `🏦 *بيانات حسابك البنكي:*\n👤 الاسم: ${u.name}\n💳 رقم الحساب: \`${u.accountNumber || 'لا يوجد (اكتب: فتح حساب)'}\`\n💰 الرصيد الحالي: *${formatMoney(u.money)}*${loanInfo}`;
 }
+
+// --- نظام التحويل (تحويل أو .تحويل) ---
+function transferMoney(senderId, targetId, amount) {
+    if (senderId === targetId) return '❌ لا يمكنك تحويل الأموال لنفسك!';
+    const sender = getUser(senderId);
+    const target = getUser(targetId);
+
+    const transAmt = parseInt(amount);
+    if (isNaN(transAmt) || transAmt <= 0) return '❌ يرجى كتابة مبلغ صحيح للتحويل!\nمثال: `تحويل 1000` (مع منشن)';
+
+    if (sender.money < transAmt) {
+        return `❌ رصيدك غير كافٍ للتحويل! رصيدك الحالي: ${formatMoney(sender.money)}`;
+    }
+
+    sender.money -= transAmt;
+    target.money += transAmt;
+    saveDB();
+
+    return `💸 *تم التحويل بنجاح!* ✅\n📤 **المحول:** ${sender.name}\n📥 **المستلم:** ${target.name}\n💰 **المبلغ:** ${formatMoney(transAmt)}`;
+}
+
+// --- نظام القروض ---
+function takeLoan(userId, amount) {
+    const u = getUser(userId);
+    if (u.loan) return `❌ لديك قرض سابق بقيمة ${formatMoney(u.loan.amount)} لم تقم بسداده بعد! اكتب ` + '`سداد القرض`';
+
+    const loanAmt = parseInt(amount);
+    if (isNaN(loanAmt) || loanAmt <= 0) return '❌ يرجى تحديد مبلغ القرض بشكل صحيح!\nمثال: `قرض 5000`';
+
+    const maxLimit = 50000;
+    if (loanAmt > maxLimit) return `❌ الحد الأقصى المسموح به للاستدانة هو ${formatMoney(maxLimit)}`;
+
+    u.money += loanAmt;
+    u.loan = {
+        amount: Math.floor(loanAmt * 1.2),
+        dueTime: Date.now() + (24 * 60 * 60 * 1000)
+    };
+
+    saveDB();
+    return `🏦 *تم الموافقة على طلب القرض!* ✅\n💰 **المبلغ المضاف لرصيدك:** ${formatMoney(loanAmt)}\n📈 **المبلغ الواجب سداده (مع فائدة 20%):** ${formatMoney(u.loan.amount)}\n⏳ **مدة السداد:** 24 ساعة`;
+}
+
+function payLoan(userId) {
+    const u = getUser(userId);
+    if (!u.loan) return '❌ ليس عليك أي قروض مسجلة!';
+
+    if (u.money < u.loan.amount) {
+        return `❌ رصيدك الحالي (${formatMoney(u.money)}) لا يكفي لسداد القرض المطلوب بقيمة ${formatMoney(u.loan.amount)}`;
+    }
+
+    u.money -= u.loan.amount;
+    u.loan = null;
+    saveDB();
+
+    return `✅ *تم سداد القرض بنجاح وإبراء ذمتك البنكية!* 🎉\n💰 رصيدك الحالي: ${formatMoney(u.money)}`;
+}
+
+// --- نظام الشركات والأرباح العشوائية (ربح وخسارة) ---
+function createCompany(userId, compName) {
+    if (!compName) return '❌ يرجى كتابة اسم الشركة!\nمثال: `انشاء شركة [الاسم]`';
+    if (globalData.companies[compName]) return '❌ هذه الشركة مسجلة مسبقاً، اختر اسمًا آخر!';
+
+    const u = getUser(userId);
+    const cost = 10000;
+    if (u.money < cost) return `❌ تكلفة إنشاء الشركة هي ${formatMoney(cost)}، رصيدك غير كافٍ!`;
+
+    u.money -= cost;
+    globalData.companies[compName] = {
+        ownerId: String(userId),
+        ownerName: u.name,
+        level: 1,
+        treasury: 0
+    };
+    saveDB();
+
+    return `🏢 *مبروك! تم تأسيس شركتك بنجاح* 🎉\n📛 **اسم الشركة:** ${compName}\n👤 **المالك:** ${u.name}\n💰 **تكلفة التأسيس:** ${formatMoney(cost)}`;
+}
+
+function investCompany(userId, compName, amount) {
+    if (!globalData.companies[compName]) return '❌ هذه الشركة غير موجودة! تأكد من الاسم عبر كتابة `قائمة الشركات`';
+    const comp = globalData.companies[compName];
+    const u = getUser(userId);
+
+    const invAmt = parseInt(amount);
+    if (isNaN(invAmt) || invAmt <= 0) return '❌ يرجى كتابة مبلغ استثمار صحيح!\nمثال: `استثمار شركة [الاسم] [المبلغ]`';
+
+    if (u.money < invAmt) return `❌ رصيدك غير كافٍ (${formatMoney(u.money)})`;
+
+    u.money -= invAmt;
+    comp.treasury += invAmt;
+    saveDB();
+
+    return `📈 *تم ضخ استثمار بنجاح في شركة (${compName})* 💼\n➕ **المبلغ المودع:** ${formatMoney(invAmt)}\n💰 **خزينة الشركة الإجمالية:** ${formatMoney(comp.treasury)}`;
+}
+
+function getCompaniesList() {
+    let list = Object.keys(globalData.companies);
+    if (list.length === 0) return '🏢 لا توجد شركات مسجلة حالياً. قم بإنشاء شركتك عبر: `انشاء شركة [الاسم]`';
+
+    let msg = '🏢 *قائمة الشركات المتاحة والاستثمار:* \n━━━━━━━━━━━━━━━\n\n';
+    list.forEach((name, i) => {
+        let c = globalData.companies[name];
+        msg += `🔹 *${i + 1}.* ${name}\n   👤 المالك: ${c.ownerName}\n   💰 الخزينة: ${formatMoney(c.treasury)}\n━━━━━━━━━━━━━━━\n`;
+    });
+    return msg;
+}
+
+// دالة أرباح وخسائر الشركات العشوائية (بناءً على المبلغ الموجود بالشركة)
+function processCompaniesRandomProfits() {
+    if (!globalData.companies || Object.keys(globalData.companies).length === 0) return null;
+
+    let report = '📊 *تقرير سوق الشركات والأرباح العشوائية:* 📉📈\n━━━━━━━━━━━━━━━\n';
+    let hasChanges = false;
+
+    for (let compName in globalData.companies) {
+        let comp = globalData.companies[compName];
+        if (comp.treasury <= 0) continue;
+
+        hasChanges = true;
+        // نسبة ربح أو خسارة عشوائية من -40% إلى +60% حسب المبلغ في خزينة الشركة
+        let percent = Math.floor(Math.random() * 101) - 40; 
+        let amountChange = Math.floor(comp.treasury * (percent / 100));
+
+        comp.treasury += amountChange;
+        if (comp.treasury < 0) comp.treasury = 0;
+
+        if (percent > 0) {
+            report += `🏢 *${compName}* 📈 ربحت بنسبة (+${percent}%)\n💰 الأرباح المضافة: +${formatMoney(amountChange)}\n`;
+        } else if (percent < 0) {
+            report += `🏢 *${compName}* 📉 خسرت بنسبة (${percent}%)\n💸 الخسارة المقتطعة: -${formatMoney(Math.abs(amountChange))}\n`;
+        } else {
+            report += `🏢 *${compName}* ⚖️ استقرار السوق (0% تغيير)\n`;
+        }
+        report += `💼 الخزينة الجديدة: ${formatMoney(comp.treasury)}\n━━━━━━━━━━━━━━━\n`;
+    }
+
+    if (hasChanges) {
+        saveDB();
+        return report;
+    }
+    return null;
+}
+
+// تشغيل دورة الأرباح والخسائر للشركات تلقائياً كل 4 ساعات
+setInterval(() => {
+    processCompaniesRandomProfits();
+}, 4 * 60 * 60 * 1000);
 
 function playLuck(userId, amount) {
     const u = getUser(userId);
@@ -469,10 +620,10 @@ function playInvestment(userId, amount) {
 
 function getTopUsers() {
     let usersList = [];
-    const BOT_NUMBER = "96566044383"; // استثناء البوت من القائمة
+    const BOT_NUMBER = "967774851129"; 
 
     for (let id in globalData.bank) {
-        if (id === BOT_NUMBER) continue; // يتخطى البوت
+        if (id === BOT_NUMBER) continue;
 
         let userObj = globalData.bank[id];
         if (userObj.money !== undefined) {
@@ -499,10 +650,12 @@ function getTopUsers() {
     return msg;
 }
 
-function checkWeeklyReset() {
-    const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
-    if (Date.now() - globalData.lastReset >= ONE_WEEK) {
+// تصفير الحسابات والشركات تلقائياً كل شهر (30 يوماً)
+function checkMonthlyReset() {
+    const ONE_MONTH = 30 * 24 * 60 * 60 * 1000;
+    if (Date.now() - globalData.lastReset >= ONE_MONTH) {
         globalData.bank = {};
+        globalData.companies = {};
         globalData.lastReset = Date.now();
         saveDB();
         return true;
@@ -510,7 +663,7 @@ function checkWeeklyReset() {
     return false;
 }
 
-// --- (5) نظام الزواج والخلع والطلاق والشحن ---
+// --- (5) نظام الزواج والشحن والسحب الإداري ---
 
 function marry(senderId, targetId, customDowry) {
     const sender = getUser(senderId);
@@ -529,7 +682,6 @@ function marry(senderId, targetId, customDowry) {
         return `❌ رصيدك غير كافٍ لدفع هذا المهر! رصيدك الحالي: ${formatMoney(sender.money)}`;
     }
 
-    // خصم المهر وتحويله فوراً للزوجة
     sender.money -= dowry;
     target.money += dowry;
 
@@ -616,14 +768,67 @@ function addMoney(targetId, amount) {
     const target = getUser(targetId);
     const addAmt = parseInt(amount);
 
-    if (isNaN(addAmt) || addAmt <= 0) {
-        return '❌ يرجى كتابة مبلغ شحن صحيح!';
-    }
+    if (isNaN(addAmt) || addAmt <= 0) return '❌ يرجى كتابة مبلغ شحن صحيح!';
 
     target.money += addAmt;
     saveDB();
 
     return `✅ **تم شحن الرصيد بنجاح!**\n👤 **المستفيد:** ${target.name}\n➕ **المبلغ المضاف:** ${formatMoney(addAmt)}\n💰 **الرصيد الجديد:** ${formatMoney(target.money)}`;
+}
+
+function subtractMoney(targetId, amount) {
+    const target = getUser(targetId);
+    const subAmt = parseInt(amount);
+
+    if (isNaN(subAmt) || subAmt <= 0) return '❌ يرجى كتابة مبلغ سحب صحيح!';
+
+    if (target.money < subAmt) {
+        target.money = 0; 
+    } else {
+        target.money -= subAmt;
+    }
+
+    saveDB();
+
+    return `🔻 **تم سحب الرصيد بنجاح!**\n👤 **المستهدف:** ${target.name}\n➖ **المبلغ المسحوب:** ${formatMoney(subAmt)}\n💰 **الرصيد المتبقي:** ${formatMoney(target.money)}`;
+}
+
+// دالة قائمة الأوامر الشاملة (الأوامر)
+function getHelpMenu() {
+    return `📜 *قائمة أوامر وعلاوات البوت الشاملة* 🤖
+━━━━━━━━━━━━━━━
+
+🏦 *أوامر البنك والحسابات:*
+🔹 \`فتح حساب\` ⟵ لإنشاء حساب بنكي جديد برقم فريد ورصيد ابتدائي.
+🔹 \`رصيدي\` أو \`بنكي\` ⟵ لعرض تفاصيل حسابك ورصيدك وقروضك.
+🔹 \`تحويل [المبلغ]\` أو \`.تحويل [المبلغ]\` (مع منشن/رد) ⟵ لتحويل أموال لشخص آخر.
+🔹 \`قرض [المبلغ]\` ⟵ لاقتراض أموال بفوائد (يجب السداد خلال 24 ساعة).
+🔹 \`سداد القرض\` ⟵ لسداد القرض المستحق عليك.
+🔹 \`التوب\` ⟵ لعرض قائمة أغنى 10 أثرياء في البوت.
+
+🎮 *أوامر الألعاب التنافسية:*
+🔹 \`دمج\` ⟵ لعبة دمج الحروف المبعثرة.
+🔹 \`فكك\` ⟵ لعبة تفكيك الجمل والكلمات.
+🔹 \`سرعة\` ⟵ لعبة كتابة النصوص بسرعة للربح.
+🔹 \`عواصم\` ⟵ لعبة الإجابة على عواصم الدول.
+🔹 \`حظ [المبلغ]\` ⟵ لعبة الحظ السريع (ربح أو خسارة).
+🔹 \`استثمار [المبلغ]\` ⟵ استثمار أموالك بنسبة ربح/خسارة عشوائية.
+
+🏢 *أوامر الشركات والأعمال:*
+🔹 \`انشاء شركة [الاسم]\` ⟵ لتأسيس شركتك الخاصة (التكلفة 10,000 ريال).
+🔹 \`استثمار شركة [الاسم] [المبلغ]\` ⟵ ضخ استثمار في خزينة الشركة.
+🔹 \`قائمة الشركات\` ⟵ لعرض الشركات المتاحة وأرصدتها.
+*(ملاحظة: خزائن الشركات تتأثر بأرباح وخسائر عشوائية دورية لتوليد الحماس!)*
+
+💍 *أوامر الزواج والعلاقات:*
+🔹 \`زواج [المهر]\` (مع منشن/رد) ⟵ لطلب الزواج ودفع المهر.
+🔹 \`طلاق\` ⟵ لإنهاء الزواج وتحويل مؤخر الصداق.
+🔹 \`خلع\` ⟵ لرفع دعوى خلع ورد المهر.
+🔹 \`زواجي\` أو \`حالي\` ⟵ لعرض حالتك الاجتماعية.
+
+🔄 *معلومات النظام:*
+📌 يتم تصفير الحسابات والشركات تلقائياً مع بداية كل شهر جديد لإتاحة المنافسة من جديد!
+━━━━━━━━━━━━━━━`;
 }
 
 // --- (6) تشغيل البوت مع دمج نظام Pairing Code المعزز ---
@@ -632,7 +837,7 @@ let pairingCodeRequested = false;
 
 async function startBot() {
     loadDB();
-    checkWeeklyReset();
+    checkMonthlyReset();
 
     const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
     const sock = makeWASocket({
@@ -649,7 +854,7 @@ async function startBot() {
             pairingCodeRequested = true;
             setTimeout(async () => {
                 try {
-                    const phoneNumber = "96566044383"; 
+                    const phoneNumber = "967774851129"; 
                     console.log("⏳ جاري طلب كود الاقتران من خوادم الواتساب...");
                     let code = await sock.requestPairingCode(phoneNumber);
                     code = code?.match(/.{1,4}/g)?.join("-") || code; 
@@ -674,7 +879,35 @@ async function startBot() {
         }
     });
 
-    // --- (7) معالجة الرسائل والأوامر ---
+    // --- (7.1) ترحيب الأعضاء الجدد (مع الصورة والمنشن) ---
+    sock.ev.on('group-participants.update', async (anu) => {
+        try {
+            const { id, participants, action } = anu;
+            if (action === 'add') {
+                for (let num of participants) {
+                    let cleanNum = num.split('@')[0];
+                    let profilePicUrl;
+                    try {
+                        profilePicUrl = await sock.profilePictureUrl(num, 'image');
+                    } catch {
+                        profilePicUrl = "https://i.ibb.co/3W9Kq5K/default-avatar.png";
+                    }
+
+                    let welcomeText = `👋 أهلاً بك يا عيني @${cleanNum} في القروب!\n✨ أنرتنا، نتمنى لك قضاء وقت ممتع معنا 🌹`;
+
+                    await sock.sendMessage(id, {
+                        image: { url: profilePicUrl },
+                        caption: welcomeText,
+                        mentions: [num]
+                    });
+                }
+            }
+        } catch (e) {
+            console.error("خطأ في رسالة الترحيب:", e);
+        }
+    });
+
+    // --- (7.2) معالجة الرسائل والأوامر ---
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
@@ -697,14 +930,20 @@ async function startBot() {
 
         getUser(cleanSenderId, null, pushName);
 
-        // --- (A) التحقق من وجود لعبة قائمة ---
-        if (activeGames[jid]) {
-            const currentGame = activeGames[jid];
+        // --- (A) التحقق من الإجابة على أي لعبة نشطة في الشات ---
+        if (activeGames[jid] && activeGames[jid].length > 0) {
             const userAnswer = text.trim().toLowerCase();
-            const correctAnswer = currentGame.answer.trim().toLowerCase();
+            
+            const matchedIndex = activeGames[jid].findIndex(g => g.answer.trim().toLowerCase() === userAnswer);
 
-            if (userAnswer === correctAnswer) {
+            if (matchedIndex !== -1) {
+                const currentGame = activeGames[jid][matchedIndex];
                 clearTimeout(currentGame.timeout);
+
+                activeGames[jid].splice(matchedIndex, 1);
+                if (activeGames[jid].length === 0) {
+                    delete activeGames[jid];
+                }
 
                 const userObj = getUser(cleanSenderId, null, pushName);
                 const newTotal = userObj.money + currentGame.reward;
@@ -712,8 +951,6 @@ async function startBot() {
 
                 const winMsg = `🎉 *إجابة صحيحة يا بطل!* (${pushName})\n\n💰 **الجائزة:** +${formatMoney(currentGame.reward)}\n💳 **رصيدك الجديد:** ${formatMoney(newTotal)}`;
                 await sock.sendMessage(jid, { text: winMsg }, { quoted: msg });
-
-                delete activeGames[jid];
                 return;
             }
         }
@@ -721,37 +958,39 @@ async function startBot() {
         // --- (B) بدء لعبة جديدة ---
         const gameType = text.trim();
         if (GAMES_BANK[gameType]) {
-            if (activeGames[jid]) {
-                await sock.sendMessage(jid, { text: '⚠️ هناك لعبة قائمة بالفعل في هذا الشات! أجب عن السؤال الحالي أولاً.' }, { quoted: msg });
-                return;
+            if (!activeGames[jid]) {
+                activeGames[jid] = [];
             }
 
             const questions = GAMES_BANK[gameType];
             const randomQuestion = questions[Math.floor(Math.random() * questions.length)];
 
-            const timer = setTimeout(async () => {
-                if (activeGames[jid]) {
-                    delete activeGames[jid];
-                    await sock.sendMessage(jid, { 
-                        text: `⏰ *انتهى الوقت!* (60 ثانية)\nلم يقم أحد بالإجابة الصحيحة. تم إلغاء اللعبة، يمكنك البدء من جديد.` 
-                    });
-                }
-            }, 60000);
-
-            activeGames[jid] = {
+            const gameObj = {
+                id: Date.now() + Math.random(),
                 question: randomQuestion.q,
                 answer: randomQuestion.a,
                 reward: randomQuestion.reward,
-                type: gameType,
-                timeout: timer
+                type: gameType
             };
 
-            const promptMsg = `🎮 *لعبة ${gameType.toUpperCase()}*\n\n❓ **السؤال:**\n${randomQuestion.q}\n\n💰 **الجائزة:** ${formatMoney(randomQuestion.reward)}\n⏰ **الفرصة:** 60 ثانية\n✍️ أرسل الإجابة الصحيحة للفوز!`;
+            const timer = setTimeout(() => {
+                if (activeGames[jid]) {
+                    activeGames[jid] = activeGames[jid].filter(g => g.id !== gameObj.id);
+                    if (activeGames[jid].length === 0) {
+                        delete activeGames[jid];
+                    }
+                }
+            }, 100000);
+
+            gameObj.timeout = timer;
+            activeGames[jid].push(gameObj);
+
+            const promptMsg = `🎮 *لعبة ${gameType.toUpperCase()}*\n\n❓ **السؤال:**\n${randomQuestion.q}\n\n💰 **الجائزة:** ${formatMoney(randomQuestion.reward)}\n✍️ أرسل الإجابة الصحيحة للفوز!`;
             await sock.sendMessage(jid, { text: promptMsg }, { quoted: msg });
             return;
         }
 
-        // --- (C) الأوامر والخدمات البنكية والزواج ---
+        // --- (C) الأوامر والخدمات البنكية والقروض والشركات ---
 
         if (text === 'فتح حساب' || text === 'إنشاء حساب' || text === 'انشاء حساب') {
             const res = createAccount(cleanSenderId, null, pushName);
@@ -763,15 +1002,81 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
+        else if (text === 'الاوامر' || text === 'اوامر' || text === 'الأوامر' || text === 'تعليمات') {
+            const res = getHelpMenu();
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
         else if (text.startsWith('حظ ')) {
             const amount = parseInt(text.split(' ')[1]);
             const res = playLuck(cleanSenderId, amount);
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
-        else if (text.startsWith('استثمار ')) {
+        else if (text.startsWith('استثمار ') && !text.startsWith('استثمار شركة')) {
             const amount = parseInt(text.split(' ')[1]);
             const res = playInvestment(cleanSenderId, amount);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        // --- ميزة التحويل (تحويل أو .تحويل) ---
+        else if (text.startsWith('تحويل') || text.startsWith('.تحويل')) {
+            const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+            const mentionedJid = contextInfo?.mentionedJid?.[0];
+            const quotedParticipant = contextInfo?.participant;
+            const targetJid = mentionedJid || quotedParticipant;
+
+            if (!targetJid) {
+                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على رسالة الشخص المراد التحويل له!\nمثال: `تحويل 1000` (مع منشن)' }, { quoted: msg });
+                return;
+            }
+
+            const args = text.split(' ');
+            const amount = args.find(arg => !isNaN(arg) && parseInt(arg) > 0);
+            if (!amount) {
+                await sock.sendMessage(jid, { text: '❌ يرجى تحديد المبلغ المراد تحويله!\nمثال: `تحويل 500`' }, { quoted: msg });
+                return;
+            }
+
+            const targetId = targetJid.split('@')[0].split(':')[0];
+            const res = transferMoney(cleanSenderId, targetId, amount);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        // --- نظام القروض ---
+        else if (text.startsWith('قرض ')) {
+            const amount = text.split(' ')[1];
+            const res = takeLoan(cleanSenderId, amount);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text === 'سداد القرض' || text === 'سداد') {
+            const res = payLoan(cleanSenderId);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        // --- نظام الشركات والمشاريع ---
+        else if (text.startsWith('انشاء شركة ')) {
+            const compName = text.replace('انشاء شركة', '').trim();
+            const res = createCompany(cleanSenderId, compName);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text.startsWith('استثمار شركة ')) {
+            const parts = text.replace('استثمار شركة', '').trim().split(' ');
+            const compName = parts[0];
+            const amount = parts[1];
+            const res = investCompany(cleanSenderId, compName, amount);
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text === 'قائمة الشركات' || text === 'الشركات') {
+            const res = getCompaniesList();
+            await sock.sendMessage(jid, { text: res }, { quoted: msg });
+        }
+
+        else if (text === 'أرباح الشركات' || text === 'سوق الشركات') {
+            const res = processCompaniesRandomProfits() || '🏢 لا توجد شركات مسجلة أو أرصدة حالياً في الخزائن لتوليد أرباح أو خسائر.';
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
@@ -780,16 +1085,14 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
-        // --- أمر الزواج المطور (مبلغ مفتوح + منشن/رد) ---
         else if (text.startsWith('زواج')) {
             const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
             const mentionedJid = contextInfo?.mentionedJid?.[0];
             const quotedParticipant = contextInfo?.participant;
-
             const targetJid = mentionedJid || quotedParticipant;
 
             if (!targetJid) {
-                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على رسالة الشخص الذي تريد الزواج منه وتحديد المبلغ!\nمثال: `زواج 5000` (مع منشن أو رد)' }, { quoted: msg });
+                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على رسالة الشخص الذي تريد الزواج منه وتحديد المبلغ!\nمثال: `زواج 5000`' }, { quoted: msg });
                 return;
             }
 
@@ -797,7 +1100,7 @@ async function startBot() {
             const customDowry = args.find(arg => !isNaN(arg) && parseInt(arg) > 0);
 
             if (!customDowry) {
-                await sock.sendMessage(jid, { text: '❌ يرجى كتابة قيمة المهر بعد كلمة زواج!\nمثال: `زواج 1000` أو `زواج 1500`' }, { quoted: msg });
+                await sock.sendMessage(jid, { text: '❌ يرجى كتابة قيمة المهر بعد كلمة زواج!\nمثال: `زواج 1000`' }, { quoted: msg });
                 return;
             }
 
@@ -806,9 +1109,9 @@ async function startBot() {
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
-        // --- أمر الشحن الخاص برقمك الكويتي فقط ---
-        else if (text.startsWith('شحن')) {
-            const ADMIN_NUMBER = "96566044383"; // رقمك المعرف للشحن فقط
+        // --- أمر الشحن والسحب الخاص بك حصرياً ---
+        else if (text.startsWith('شحن') || text.startsWith('سحب')) {
+            const ADMIN_NUMBER = "967774851129"; 
 
             if (cleanSenderId !== ADMIN_NUMBER) {
                 await sock.sendMessage(jid, { text: '🚫 هذا الأمر مخصص لمالك البوت فقط!' }, { quoted: msg });
@@ -818,11 +1121,10 @@ async function startBot() {
             const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
             const mentionedJid = contextInfo?.mentionedJid?.[0];
             const quotedParticipant = contextInfo?.participant;
-
             const targetJid = mentionedJid || quotedParticipant;
 
             if (!targetJid) {
-                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على الشخص المراد شحن رصيده!\nمثال: `شحن 1000`' }, { quoted: msg });
+                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على الشخص المراد تطبيق الأمر عليه!' }, { quoted: msg });
                 return;
             }
 
@@ -830,12 +1132,19 @@ async function startBot() {
             const amount = args.find(arg => !isNaN(arg) && parseInt(arg) > 0);
 
             if (!amount) {
-                await sock.sendMessage(jid, { text: '❌ يرجى تحديد المبلغ المالي لشحنه!\nمثال: `شحن 5000` (مع منشن)' }, { quoted: msg });
+                await sock.sendMessage(jid, { text: '❌ يرجى تحديد المبلغ المالي!' }, { quoted: msg });
                 return;
             }
 
             const targetId = targetJid.split('@')[0].split(':')[0];
-            const res = addMoney(targetId, amount);
+
+            let res;
+            if (text.startsWith('شحن')) {
+                res = addMoney(targetId, amount);
+            } else {
+                res = subtractMoney(targetId, amount);
+            }
+
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
 
@@ -852,26 +1161,6 @@ async function startBot() {
         else if (text === 'حالي' || text === 'زواجي') {
             const res = getStatus(cleanSenderId);
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
-        }
-
-        else if (text === 'زوجتي') {
-            const user = getUser(cleanSenderId);
-            if (!user.marriage) {
-                await sock.sendMessage(jid, { text: '❌ أنت لست متزوجاً بعد!' }, { quoted: msg });
-            } else {
-                const res = `👰‍♀️ **زوجتك المسجلة هي:** ${user.marriage.spouseName}\n📅 **تاريخ الزواج:** ${user.marriage.date}`;
-                await sock.sendMessage(jid, { text: res }, { quoted: msg });
-            }
-        }
-
-        else if (text === 'زوجي') {
-            const user = getUser(cleanSenderId);
-            if (!user.marriage) {
-                await sock.sendMessage(jid, { text: '❌ أنتِ لستِ متزوجة بعد!' }, { quoted: msg });
-            } else {
-                const res = `🤵‍♂️ **زوجك المسجل هو:** ${user.marriage.spouseName}\n📅 **تاريخ الزواج:** ${user.marriage.date}`;
-                await sock.sendMessage(jid, { text: res }, { quoted: msg });
-            }
         }
     });
 }
