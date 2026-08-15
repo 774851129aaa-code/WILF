@@ -375,6 +375,18 @@ const GAMES_BANK = {
 
 // --- (3) الوظائف المساعدة العامة ---
 
+function checkUserLoan(u) {
+    if (u && u.loan && Date.now() > u.loan.dueTime) {
+        if (u.money >= u.loan.amount) {
+            u.money -= u.loan.amount;
+        } else {
+            u.money = 0;
+        }
+        u.loan = null;
+        saveDB();
+    }
+}
+
 function getUser(userId, username, firstName) {
     const uKey = String(userId);
 
@@ -400,7 +412,10 @@ function getUser(userId, username, firstName) {
     if (username) globalData.bank[uKey].username = username;
     if (firstName) globalData.bank[uKey].name = firstName;
 
-    return globalData.bank[uKey];
+    const userObj = globalData.bank[uKey];
+    checkUserLoan(userObj);
+
+    return userObj;
 }
 
 function generateAccount() {
@@ -434,7 +449,7 @@ function createAccount(userId, username, firstName) {
 
 function getAccountInfo(userId, username, firstName) {
     const u = getUser(userId, username, firstName);
-    let loanInfo = u.loan ? `\n📌 *قرض غير مسدد:* ${formatMoney(u.loan.amount)}` : `\n📌 *القروض:* لا يوجد`;
+    let loanInfo = u.loan ? `\n📌 *قرض غير مسدد:* ${formatMoney(u.loan.amount)} (بنسبة 110%)` : `\n📌 *القروض:* لا يوجد`;
     let jailInfo = (u.jailUntil && u.jailUntil > Date.now()) ? `\n🚨 *الحالة:* مسجون في السجن 🚔 (باقي ${Math.ceil((u.jailUntil - Date.now())/(60*1000))} دقيقة)` : `\n🟢 *الحالة:* طليق وحر`;
     return `🏦 *بيانات حسابك البنكي:*\n👤 الاسم: ${u.name}\n💳 رقم الحساب: \`${u.accountNumber || 'لا يوجد (اكتب: فتح حساب)'}\`\n💰 الرصيد الحالي: *${formatMoney(u.money)}*${loanInfo}${jailInfo}`;
 }
@@ -443,6 +458,12 @@ function getAccountInfo(userId, username, firstName) {
 function transferMoney(senderId, targetId, amount) {
     if (senderId === targetId) return '❌ لا يمكنك تحويل الأموال لنفسك!';
     const sender = getUser(senderId);
+
+    // التحقق من القرض في الخفاء ومنع التحويل إلا إذا سدد القرض
+    if (sender.loan) {
+        return `❌ لا يمكنك تحويل الأموال ولديك قرض غير مسدد! يرجى سداد القرض أولاً عبر كتابة \`سداد القرض\`.`;
+    }
+
     const target = getUser(targetId);
 
     const transAmt = parseInt(amount);
@@ -472,12 +493,12 @@ function takeLoan(userId, amount) {
 
     u.money += loanAmt;
     u.loan = {
-        amount: Math.floor(loanAmt * 1.2),
-        dueTime: Date.now() + (24 * 60 * 60 * 1000)
+        amount: Math.floor(loanAmt * 1.1), // 110% (المبلغ كامل وجنبه 10%)
+        dueTime: Date.now() + (48 * 60 * 60 * 1000) // 48 ساعة
     };
 
     saveDB();
-    return `🏦 *تم الموافقة على طلب القرض!* ✅\n💰 **المبلغ المضاف لرصيدك:** ${formatMoney(loanAmt)}\n📈 **المبلغ الواجب سداده (مع فائدة 20%):** ${formatMoney(u.loan.amount)}\n⏳ **مدة السداد:** 24 ساعة`;
+    return `🏦 *تم الموافقة على طلب القرض!* ✅\n💰 **المبلغ المضاف لرصيدك:** ${formatMoney(loanAmt)}\n📈 **المبلغ الواجب سداده (بنسبة 110%):** ${formatMoney(u.loan.amount)}\n⏳ **مدة السداد:** 48 ساعة\n⚠️ *تنبيه:* إذا لم تقم بالسداد خلال 48 ساعة، سيتم سحب المبلغ تلقائياً من رصيدك، ولن تتمكن من تحويل أي أموال حتى تسدد القرض!`;
 }
 
 function payLoan(userId) {
@@ -856,9 +877,9 @@ function getHelpMenu() {
 🏦 *أوامر البنك والحسابات:*
 🔹 \`فتح حساب\` ⟵ لإنشاء حساب بنكي جديد برقم فريد ورصيد ابتدائي.
 🔹 \`رصيدي\` أو \`بنكي\` ⟵ لعرض تفاصيل حسابك ورصيدك وقروضك.
-🔹 \`تحويل [المبلغ]\` أو \`.تحويل [المبلغ]\` (مع منشن/رد) ⟵ لتحويل أموال لشخص آخر.
-🔹 \`قرض [المبلغ]\` ⟵ لاقتراض أموال بفوائد (يجب السداد خلال 24 ساعة).
-🔹 \`سداد القرض\` ⟵ لسداد القرض المستحق عليك.
+🔹 \`تحويل [المبلغ]\` أو \`.تحويل [المبلغ]\` (مع منشن/رد) ⟵ لتحويل أموال لشخص آخر (يمنع التحويل في حال وجود قرض غير مسدد).
+🔹 \`قرض [المبلغ]\` ⟵ لاقتراض أموال بنسبة 110% (يجب السداد خلال 48 ساعة، وإلا سيتم سحب المبلغ تلقائياً من رصيدك في الخلفية).
+🔹 \`سداد القرض\` ⟵ لسداد القرض المستحق عليك وإلغاء القيود.
 🔹 \`التوب\` ⟵ لعرض قائمة أغنى 10 أثرياء في البوت.
 
 🎮 *أوامر الألعاب التنافسية:*
