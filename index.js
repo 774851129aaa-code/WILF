@@ -28,7 +28,7 @@ const fs = require('fs');
 
 // --- (1) تهيئة قاعدة البيانات والملفات والجلسات ---
 const DB_FILE = './bankDB.json';
-let globalData = { bank: {}, companies: {}, stockMarket: {}, lastReset: Date.now() };
+let globalData = { bank: {}, companies: {}, stockMarket: {}, activity: {}, lastReset: Date.now() };
 
 // لحفظ الألعاب الشغالة حالياً لكل شات (تسمح بأكثر من لعبة في نفس الوقت)
 const activeGames = {};
@@ -44,6 +44,7 @@ function loadDB() {
     if (!globalData.bank) globalData.bank = {};
     if (!globalData.companies) globalData.companies = {};
     if (!globalData.stockMarket) globalData.stockMarket = { price: 100, trend: "استقرار ⚖️" };
+    if (!globalData.activity) globalData.activity = {};
     if (!globalData.lastReset) globalData.lastReset = Date.now();
     
     // التأكد من وجود الخصائص الجديدة للشركات القديمة
@@ -1110,11 +1111,46 @@ function getTopData() {
     return { text: msg, mentions: [...new Set(mentions)] };
 }
 
+// دالة جلب المتفاعلين في المجموعة
+function getActiveMembers(chatId) {
+    if (!globalData.activity[chatId]) {
+        return '📊 لا توجد بيانات تفاعل مسجلة لهذه المجموعة بعد!';
+    }
+
+    let chatUsers = globalData.activity[chatId];
+    let list = [];
+
+    for (let userId in chatUsers) {
+        let userObj = getUser(userId);
+        list.push({
+            id: userId,
+            name: userObj.name || 'مستخدم',
+            messagesCount: chatUsers[userId]
+        });
+    }
+
+    list.sort((a, b) => b.messagesCount - a.messagesCount);
+    let topMembers = list.slice(0, 15); // عرض أفضل 15 متفاعل
+
+    let msg = '📊 *قائمة أكثر الأعضاء تفاعلاً في القروب:* 🔥\n━━━━━━━━━━━━━━━\n';
+    let mentions = [];
+
+    topMembers.forEach((m, i) => {
+        let badge = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '👤';
+        let userJid = m.id.includes('@') ? m.id : m.id + '@s.whatsapp.net';
+        mentions.push(userJid);
+        msg += `${badge} *${i + 1}.* @${m.id}\n   💬 عدد الرسائل: *${m.messagesCount.toLocaleString('ar-SA')} رسالة*\n\n`;
+    });
+
+    return { text: msg, mentions: [...new Set(mentions)] };
+}
+
 function checkMonthlyReset() {
     const ONE_MONTH = 30 * 24 * 60 * 60 * 1000;
     if (Date.now() - globalData.lastReset >= ONE_MONTH) {
         globalData.bank = {};
         globalData.companies = {};
+        globalData.activity = {};
         globalData.lastReset = Date.now();
         saveDB();
         return true;
@@ -1260,6 +1296,7 @@ function getHelpMenu() {
 🔹 \`قرض [المبلغ]\` ⟵ لاقتراض أموال بنسبة 110% (يجب السداد خلال 48 ساعة).
 🔹 \`سداد القرض\` ⟵ لسداد القرض المستحق عليك.
 🔹 \`التوب\` ⟵ لعرض قائمة أغنى 10 شركات وأغنى 10 أثرياء.
+🔹 \`المتفاعلين\` ⟵ لعرض قائمة أكثر الأعضاء تفاعلاً وعدد رسائل كل شخص.
 
 ⭐ *أوامر الترقيات الخاصة (VIP):*
 🔹 \`شراء vip\` ⟵ لشراء رتبة VIP المميزة بمبلغ 1,000,000 ريال (تمنحك خصم ضرائب التحويل بالكامل وأرباح مضاعفة من أمر العمل).
@@ -1368,7 +1405,28 @@ async function startBot() {
                         profilePicUrl = "https://i.ibb.co/3W9Kq5K/default-avatar.png";
                     }
 
-                    let welcomeText = `👋 أهلاً بك يا عيني @${cleanNum} في القروب!\n✨ أنرتنا، نتمنى لك قضاء وقت ممتع معنا 🌹`;
+                    let welcomeText = `أهلاً بك @${cleanNum} في القروب!\n╭━━━━━━━〔 👑 ༊ෆ SS7 ꕥ SHAMOKH ෆ༊ 👑 〕━━━━━━━╮✨ أهــلاً وســهــلاً بــك ✨
+  فــي قــروب SS7 ꕥ SHAMOKH 🤍
+
+يــســرّنــا انــضــمــامــك إلــى عــائــلــتــنــا 💎
+ونــتــمــنــى لــك وقــتًــا مــلــيــئًــا 
+بــالــمــتــعــة والــتــفــاعــل والاحــتــرام 🌟
+
+    ━━━━━━━━◇👑◇━━━━━━━━
+
+
+
+📜 قــانــونــنــا:
+الاحــتــرام • الالــتــزام • الــروقــان 😌
+لــلــحــفــاظ عــلــى أجــواء جــمــيــلــة لــلــجــمــيــع
+
+💬 اســتــمــتــع • شــارك • كــوّن صــداقــات
+وكــن جــزءًا مــن مــجــتــمــع SS7 ꕥ SHAMOKH 👑
+
+    ✨ نــتــمــنــى لــك إقــامــة مــمــتــعــة ✨
+           أهــلًا بــك بــيــنــنــا 🤍
+
+╰━━━━━━━━━━━━━━╯`;
 
                     await sock.sendMessage(id, {
                         image: { url: profilePicUrl },
@@ -1392,6 +1450,20 @@ async function startBot() {
         const rawSender = msg.key.participant || msg.key.remoteJid;
         const cleanSenderId = rawSender.split('@')[0].split(':')[0];
         const pushName = msg.pushName || "مستخدم";
+        const jid = msg.key.remoteJid;
+
+        // --- تتبع عدد رسائل الأعضاء تلقائياً لكل قروب ---
+        if (jid.endsWith('@g.us')) {
+            if (!globalData.activity[jid]) {
+                globalData.activity[jid] = {};
+            }
+            if (!globalData.activity[jid][cleanSenderId]) {
+                globalData.activity[jid][cleanSenderId] = 0;
+            }
+            globalData.activity[jid][cleanSenderId] += 1;
+            // حفظ دوري خفيف (يمكنك حفظه بشكل أوسع أو عند الخروج لتقليل الكتابة المتكررة، لكن حفظه هنا يضمن عدم الضياع)
+            saveDB();
+        }
 
         const text = (
             msg.message?.conversation || 
@@ -1401,7 +1473,6 @@ async function startBot() {
 
         if (!text) return;
 
-        const jid = msg.key.remoteJid;
         const user = getUser(cleanSenderId, null, pushName);
 
         // --- نظام السجن ---
@@ -1671,6 +1742,22 @@ async function startBot() {
                 text: topData.text, 
                 mentions: topData.mentions 
             }, { quoted: msg });
+        }
+
+        else if (text === 'المتفاعلين' || text === 'التفاعل' || text === 'نشاط') {
+            if (!jid.endsWith('@g.us')) {
+                await sock.sendMessage(jid, { text: '❌ هذا الأمر يعمل داخل المجموعات فقط!' }, { quoted: msg });
+                return;
+            }
+            const activeData = getActiveMembers(jid);
+            if (typeof activeData === 'string') {
+                await sock.sendMessage(jid, { text: activeData }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, { 
+                    text: activeData.text, 
+                    mentions: activeData.mentions 
+                }, { quoted: msg });
+            }
         }
 
         else if (text.startsWith('زواج')) {
