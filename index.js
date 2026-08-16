@@ -1111,7 +1111,7 @@ function getTopData() {
     return { text: msg, mentions: [...new Set(mentions)] };
 }
 
-// دالة جلب المتفاعلين في المجموعة
+// دالة جلب المتفاعلين في المجموعة (تم تعديلها لكتابة الاسم فقط)
 function getActiveMembers(chatId) {
     if (!globalData.activity[chatId]) {
         return '📊 لا توجد بيانات تفاعل مسجلة لهذه المجموعة بعد!';
@@ -1139,7 +1139,8 @@ function getActiveMembers(chatId) {
         let badge = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '👤';
         let userJid = m.id.includes('@') ? m.id : m.id + '@s.whatsapp.net';
         mentions.push(userJid);
-        msg += `${badge} *${i + 1}.* @${m.id}\n   💬 عدد الرسائل: *${m.messagesCount.toLocaleString('ar-SA')} رسالة*\n\n`;
+        // تم التعديل هنا لكتابة اسم المستخدم (m.name) بدلاً من اليوزر أو الرابط
+        msg += `${badge} *${i + 1}.* ${m.name}\n   💬 عدد الرسائل: *${m.messagesCount.toLocaleString('ar-SA')} رسالة*\n\n`;
     });
 
     return { text: msg, mentions: [...new Set(mentions)] };
@@ -1405,28 +1406,7 @@ async function startBot() {
                         profilePicUrl = "https://i.ibb.co/3W9Kq5K/default-avatar.png";
                     }
 
-                    let welcomeText = `أهلاً بك @${cleanNum} في القروب!\n╭━━━━━━━〔 👑 ༊ෆ SS7 ꕥ SHAMOKH ෆ༊ 👑 〕━━━━━━━╮✨ أهــلاً وســهــلاً بــك ✨
-  فــي قــروب SS7 ꕥ SHAMOKH 🤍
-
-يــســرّنــا انــضــمــامــك إلــى عــائــلــتــنــا 💎
-ونــتــمــنــى لــك وقــتًــا مــلــيــئًــا 
-بــالــمــتــعــة والــتــفــاعــل والاحــتــرام 🌟
-
-    ━━━━━━━━◇👑◇━━━━━━━━
-
-
-
-📜 قــانــونــنــا:
-الاحــتــرام • الالــتــزام • الــروقــان 😌
-لــلــحــفــاظ عــلــى أجــواء جــمــيــلــة لــلــجــمــيــع
-
-💬 اســتــمــتــع • شــارك • كــوّن صــداقــات
-وكــن جــزءًا مــن مــجــتــمــع SS7 ꕥ SHAMOKH 👑
-
-    ✨ نــتــمــنــى لــك إقــامــة مــمــتــعــة ✨
-           أهــلًا بــك بــيــنــنــا 🤍
-
-╰━━━━━━━━━━━━━━╯`;
+                    let welcomeText = `أهلاً بك @${cleanNum} في القروب!\n╭━━━━━━━〔 👑 ༊ෆ SS7 ꕥ SHAMOKH ෆ༊ 👑 〕━━━━━━━╮✨ أهــلاً وســهــلاً بــك ✨\n  فــي قــروب SS7 ꕥ SHAMOKH 🤍\n\nيــســرّنــا انــضــمــامــك إلــى عــائــلــتــنــا 💎\nونــتــمــنــى لــك وقــتًــا مــلــيــئًــا \nبــالــمــتــعــة والــتــفــاعــل والاحــتــرام 🌟\n\n    ━━━━━━━━◇👑◇━━━━━━━━\n\n\n\n📜 قــانــونــنــا:\nالاحــتــرام • الالــتــزام • الــروقــان 😌\nلــلــحــفــاظ عــلــى أجــواء جــمــيــلــة لــلــجــمــيــع\n\n💬 اســتــمــتــع • شــارك • كــوّن صــداقــات\nوكــن جــزءًا مــن مــجــتــمــع SS7 ꕥ SHAMOKH 👑\n\n    ✨ نــتــمــنــى لــك إقــامــة مــمــتــعــة ✨\n           أهــلًا بــك بــيــنــنــا 🤍\n\n╰━━━━━━━━━━━━━━╯`;
 
                     await sock.sendMessage(id, {
                         image: { url: profilePicUrl },
@@ -1461,7 +1441,6 @@ async function startBot() {
                 globalData.activity[jid][cleanSenderId] = 0;
             }
             globalData.activity[jid][cleanSenderId] += 1;
-            // حفظ دوري خفيف (يمكنك حفظه بشكل أوسع أو عند الخروج لتقليل الكتابة المتكررة، لكن حفظه هنا يضمن عدم الضياع)
             saveDB();
         }
 
@@ -1610,7 +1589,7 @@ async function startBot() {
             const quotedParticipant = contextInfo?.participant;
             const targetJid = mentionedJid || quotedParticipant;
 
-            let targetId = cleanSenderId; // الافتراضي هو دفع غرامة السجين لنفسه
+            let targetId = cleanSenderId; 
 
             if (targetJid) {
                 targetId = targetJid.split('@')[0].split(':')[0];
@@ -1787,56 +1766,37 @@ async function startBot() {
         // --- نظام الشحن والسحب المفتوح في كل المجموعات بالرمز السري ---
         else if (text.startsWith('شحن') || text.startsWith('سحب')) {
             if (!text.includes("annoor77485")) {
-                await sock.sendMessage(jid, { text: '❌ عذراً، خطأ في الرمز السري! يجب كتابة الرمز الصحيح `***` لإتمام عملية الشحن أو السحب.\nمثال: `شحن 5000 ` (مع منشن)' }, { quoted: msg });
+                await sock.sendMessage(jid, { text: '❌ عذراً، خطأ في الرمز السري أو صيغة الأمر غير صحيحة!' }, { quoted: msg });
                 return;
             }
-
+            const parts = text.split(' ');
+            const amountIndex = parts.findIndex(p => !isNaN(p) && parseInt(p) > 0);
+            if (amountIndex === -1) {
+                await sock.sendMessage(jid, { text: '❌ يرجى تحديد المبلغ بشكل صحيح!' }, { quoted: msg });
+                return;
+            }
+            const amount = parseInt(parts[amountIndex]);
+            
             const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
             const mentionedJid = contextInfo?.mentionedJid?.[0];
             const quotedParticipant = contextInfo?.participant;
             const targetJid = mentionedJid || quotedParticipant;
 
             if (!targetJid) {
-                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على الشخص المراد تطبيق الأمر عليه!' }, { quoted: msg });
-                return;
-            }
-
-            const args = text.split(' ');
-            const amount = args.find(arg => !isNaN(arg) && parseInt(arg) > 0);
-
-            if (!amount) {
-                await sock.sendMessage(jid, { text: '❌ يرجى تحديد المبلغ المالي!' }, { quoted: msg });
+                await sock.sendMessage(jid, { text: '❌ يرجى عمل منشن أو رد على الشخص المراد شحن أو سحب الرصيد منه!' }, { quoted: msg });
                 return;
             }
 
             const targetId = targetJid.split('@')[0].split(':')[0];
-
-            let res;
+            let res = '';
             if (text.startsWith('شحن')) {
                 res = addMoney(targetId, amount);
             } else {
                 res = subtractMoney(targetId, amount);
             }
-
-            await sock.sendMessage(jid, { text: res }, { quoted: msg });
-        }
-
-        else if (text === 'طلاق') {
-            const res = divorce(cleanSenderId);
-            await sock.sendMessage(jid, { text: res }, { quoted: msg });
-        }
-
-        else if (text === 'خلع') {
-            const res = khul(cleanSenderId);
-            await sock.sendMessage(jid, { text: res }, { quoted: msg });
-        }
-
-        else if (text === 'حالي' || text === 'زواجي') {
-            const res = getStatus(cleanSenderId);
             await sock.sendMessage(jid, { text: res }, { quoted: msg });
         }
     });
 }
 
-// بدء تشغيل البوت
 startBot();
